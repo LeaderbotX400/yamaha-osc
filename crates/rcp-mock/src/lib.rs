@@ -91,7 +91,9 @@ impl MockConsoleBuilder {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("mock console must be able to bind a loopback port");
-        let addr = listener.local_addr().expect("bound listener has an address");
+        let addr = listener
+            .local_addr()
+            .expect("bound listener has an address");
 
         let shared = Arc::new(Mutex::new(Shared {
             faults: self.faults,
@@ -99,11 +101,7 @@ impl MockConsoleBuilder {
         }));
         let (control, _) = broadcast::channel(64);
 
-        tokio::spawn(accept_loop(
-            listener,
-            Arc::clone(&shared),
-            control.clone(),
-        ));
+        tokio::spawn(accept_loop(listener, Arc::clone(&shared), control.clone()));
 
         MockConsole {
             addr,
@@ -181,7 +179,9 @@ impl MockConsole {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Shared> {
-        self.shared.lock().expect("mock console state is not poisoned")
+        self.shared
+            .lock()
+            .expect("mock console state is not poisoned")
     }
 }
 
@@ -311,9 +311,17 @@ fn handle(shared: &Arc<Mutex<Shared>>, line: &str) -> (Option<String>, bool, boo
             // Store the value with its original quoting so `get` echoes it back faithfully.
             let value = tokens
                 .get(4)
-                .map(|(t, quoted)| if *quoted { format!("\"{t}\"") } else { t.clone() })
+                .map(|(t, quoted)| {
+                    if *quoted {
+                        format!("\"{t}\"")
+                    } else {
+                        t.clone()
+                    }
+                })
                 .unwrap_or_default();
-            state.values.insert((path.clone(), index, sub), value.clone());
+            state
+                .values
+                .insert((path.clone(), index, sub), value.clone());
             format!("OK set {path} {index} {sub} {value}")
         }
         "get" => {
@@ -404,7 +412,10 @@ mod tests {
     #[tokio::test]
     async fn set_then_get_round_trips_a_quoted_label() {
         let shared = Arc::new(Mutex::new(Shared::default()));
-        handle(&shared, r#"set MIXER:Current/InCh/Label/Name 4 0 "Lead Vox""#);
+        handle(
+            &shared,
+            r#"set MIXER:Current/InCh/Label/Name 4 0 "Lead Vox""#,
+        );
         let (reply, _, _) = handle(&shared, "get MIXER:Current/InCh/Label/Name 4 0");
         assert_eq!(
             reply.unwrap(),

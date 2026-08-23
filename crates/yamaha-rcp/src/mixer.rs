@@ -421,7 +421,12 @@ impl Mixer {
     }
 
     /// Set a strip's label colour.
-    pub async fn set_color(&self, strip: Strip, index: u32, color: LabelColor) -> Result<(), Error> {
+    pub async fn set_color(
+        &self,
+        strip: Strip,
+        index: u32,
+        color: LabelColor,
+    ) -> Result<(), Error> {
         self.set_str(&strip.path("Label/Color"), index, 0, &color.to_string())
             .await
     }
@@ -483,13 +488,8 @@ impl Mixer {
 
     /// Engage or release a mute master.
     pub async fn set_mute_master(&self, group: u32, engaged: bool) -> Result<(), Error> {
-        self.set_int(
-            "MIXER:Current/MuteMaster/On",
-            group,
-            0,
-            i32::from(engaged),
-        )
-        .await
+        self.set_int("MIXER:Current/MuteMaster/On", group, 0, i32::from(engaged))
+            .await
     }
 
     /// Recall a scene from one of the console's two banks.

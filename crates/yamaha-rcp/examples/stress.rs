@@ -33,7 +33,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Two simultaneous fades in opposite directions, then back again.
     let (a, b) = tokio::join!(
-        mixer.fade(Strip::Input, 1, Fade::to(-40_00, Duration::from_secs(3)).from(10_00)),
+        mixer.fade(
+            Strip::Input,
+            1,
+            Fade::to(-40_00, Duration::from_secs(3)).from(10_00)
+        ),
         mixer.fade(
             Strip::Input,
             2,
@@ -54,7 +58,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mixer = mixer.clone();
         tasks.push(tokio::spawn(async move {
             mixer
-                .fade(Strip::Input, ch, Fade::to(yamaha_rcp::NEG_INF, Duration::from_secs(3)))
+                .fade(
+                    Strip::Input,
+                    ch,
+                    Fade::to(yamaha_rcp::NEG_INF, Duration::from_secs(3)),
+                )
                 .await
         }));
     }

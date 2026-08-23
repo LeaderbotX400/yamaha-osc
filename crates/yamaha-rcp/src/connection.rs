@@ -281,12 +281,13 @@ impl Actor {
                             s
                         }
                         Err(e) => {
-                            let _ = self.state.send(ConnectionState::Disconnected(e.to_string()));
+                            let _ = self
+                                .state
+                                .send(ConnectionState::Disconnected(e.to_string()));
                             warn!(addr = %self.addr, error = %e, retry_in = ?backoff,
                                   "console connect failed");
                             tokio::time::sleep(jittered(backoff)).await;
-                            backoff =
-                                (backoff * 2).min(self.config.reconnect_max_backoff);
+                            backoff = (backoff * 2).min(self.config.reconnect_max_backoff);
                             continue;
                         }
                     }

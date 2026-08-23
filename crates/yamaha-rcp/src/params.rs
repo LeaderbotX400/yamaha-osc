@@ -134,7 +134,11 @@ impl ParamInfo {
     /// Rounds half away from zero so a UI value of -0.005 dB does not silently become +0.00.
     pub fn db_to_raw(&self, db: f32) -> i32 {
         if !db.is_finite() {
-            return if db.is_sign_negative() { NEG_INF } else { self.max };
+            return if db.is_sign_negative() {
+                NEG_INF
+            } else {
+                self.max
+            };
         }
         let scaled = (db * self.scale as f32).round();
         if scaled <= self.min as f32 {
@@ -248,7 +252,9 @@ mod tests {
 
     #[test]
     fn input_fader_matches_the_captured_table() {
-        let p = ParamTable::tf().get("MIXER:Current/InCh/Fader/Level").unwrap();
+        let p = ParamTable::tf()
+            .get("MIXER:Current/InCh/Fader/Level")
+            .unwrap();
         assert_eq!(p.instances(), 40);
         assert_eq!(p.subs(), 1, "Fader/Level has no sub-index");
         assert_eq!(p.min, NEG_INF);
@@ -260,7 +266,9 @@ mod tests {
 
     #[test]
     fn sends_have_a_real_sub_index_range() {
-        let p = ParamTable::tf().get("MIXER:Current/InCh/ToMix/Level").unwrap();
+        let p = ParamTable::tf()
+            .get("MIXER:Current/InCh/ToMix/Level")
+            .unwrap();
         assert_eq!(p.instances(), 40);
         assert_eq!(p.subs(), 20);
         assert!(p.check_indices(39, 19).is_ok());
@@ -278,11 +286,23 @@ mod tests {
     #[test]
     fn dca_and_mute_master_counts() {
         let t = ParamTable::tf();
-        assert_eq!(t.get("MIXER:Current/DCA/Fader/Level").unwrap().instances(), 8);
+        assert_eq!(
+            t.get("MIXER:Current/DCA/Fader/Level").unwrap().instances(),
+            8
+        );
         assert_eq!(t.get("MIXER:Current/MuteMaster/On").unwrap().instances(), 6);
-        assert_eq!(t.get("MIXER:Current/Mix/Fader/Level").unwrap().instances(), 20);
-        assert_eq!(t.get("MIXER:Current/St/Fader/Level").unwrap().instances(), 2);
-        assert_eq!(t.get("MIXER:Current/Mono/Fader/Level").unwrap().instances(), 1);
+        assert_eq!(
+            t.get("MIXER:Current/Mix/Fader/Level").unwrap().instances(),
+            20
+        );
+        assert_eq!(
+            t.get("MIXER:Current/St/Fader/Level").unwrap().instances(),
+            2
+        );
+        assert_eq!(
+            t.get("MIXER:Current/Mono/Fader/Level").unwrap().instances(),
+            1
+        );
     }
 
     #[test]
@@ -304,7 +324,9 @@ mod tests {
 
     #[test]
     fn db_round_trips_through_the_scale() {
-        let p = ParamTable::tf().get("MIXER:Current/InCh/Fader/Level").unwrap();
+        let p = ParamTable::tf()
+            .get("MIXER:Current/InCh/Fader/Level")
+            .unwrap();
         assert_eq!(p.db_to_raw(-10.0), -1000);
         assert_eq!(p.db_to_raw(0.0), 0);
         assert_eq!(p.db_to_raw(10.0), 1000);
@@ -313,21 +335,27 @@ mod tests {
 
     #[test]
     fn db_clamps_to_the_consoles_range_rather_than_erroring() {
-        let p = ParamTable::tf().get("MIXER:Current/InCh/Fader/Level").unwrap();
+        let p = ParamTable::tf()
+            .get("MIXER:Current/InCh/Fader/Level")
+            .unwrap();
         assert_eq!(p.db_to_raw(99.0), 1000, "above max clamps to max");
         assert_eq!(p.db_to_raw(-500.0), NEG_INF, "below min becomes -inf");
     }
 
     #[test]
     fn negative_infinity_is_the_sentinel_both_ways() {
-        let p = ParamTable::tf().get("MIXER:Current/InCh/Fader/Level").unwrap();
+        let p = ParamTable::tf()
+            .get("MIXER:Current/InCh/Fader/Level")
+            .unwrap();
         assert_eq!(p.db_to_raw(f32::NEG_INFINITY), NEG_INF);
         assert_eq!(p.raw_to_db(NEG_INF), f32::NEG_INFINITY);
     }
 
     #[test]
     fn db_rounds_rather_than_truncating() {
-        let p = ParamTable::tf().get("MIXER:Current/InCh/Fader/Level").unwrap();
+        let p = ParamTable::tf()
+            .get("MIXER:Current/InCh/Fader/Level")
+            .unwrap();
         // 0.005 dB * 100 = 0.5 -> 1, not 0. Truncation would lose the last step of a fade.
         assert_eq!(p.db_to_raw(-3.456), -346);
         assert_eq!(p.db_to_raw(-3.454), -345);

@@ -169,7 +169,14 @@ mod tests {
     fn tokenize_plain() {
         assert_eq!(
             tokenize("OK set MIXER:Current/InCh/Fader/Level 0 0 -1000"),
-            ["OK", "set", "MIXER:Current/InCh/Fader/Level", "0", "0", "-1000"]
+            [
+                "OK",
+                "set",
+                "MIXER:Current/InCh/Fader/Level",
+                "0",
+                "0",
+                "-1000"
+            ]
         );
     }
 
@@ -177,7 +184,14 @@ mod tests {
     fn tokenize_keeps_spaces_inside_quotes() {
         assert_eq!(
             tokenize(r#"OK get MIXER:Current/InCh/Label/Name 4 0 "Lead  Vox""#),
-            ["OK", "get", "MIXER:Current/InCh/Label/Name", "4", "0", "Lead  Vox"]
+            [
+                "OK",
+                "get",
+                "MIXER:Current/InCh/Label/Name",
+                "4",
+                "0",
+                "Lead  Vox"
+            ]
         );
     }
 
@@ -220,7 +234,10 @@ mod tests {
     #[test]
     fn line_buffer_splits_several_responses_in_one_read() {
         let mut lb = LineBuffer::new();
-        assert_eq!(lb.push(b"OK a\nOK b\nOK c\n").unwrap(), ["OK a", "OK b", "OK c"]);
+        assert_eq!(
+            lb.push(b"OK a\nOK b\nOK c\n").unwrap(),
+            ["OK a", "OK b", "OK c"]
+        );
     }
 
     #[test]
