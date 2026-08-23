@@ -6,7 +6,9 @@
 use std::time::{Duration, Instant};
 
 use rcp_mock::MockConsole;
-use yamaha_rcp::{ConnectionConfig, Curve, Error, Fade, LabelColor, Mixer, Strip, NEG_INF};
+use yamaha_rcp::{
+    ConnectionConfig, Curve, Error, Fade, LabelColor, Mixer, Strip, MIN_DB_RAW, NEG_INF,
+};
 
 /// Timeouts tuned down so tests fail fast instead of waiting out production defaults.
 fn test_config() -> ConnectionConfig {
@@ -241,8 +243,9 @@ async fn fade_lands_exactly_on_target_and_moves_monotonically() {
     );
 }
 
-/// -inf is a sentinel (-32768), not a point on the dB scale. Ramping through it would slam the
-/// fader to the bottom on the first step.
+/// -inf is a sentinel (-32768), not a point on the dB scale, and it is also the parameter's
+/// reported minimum. Interpolating towards it would sweep the fader down through -327 dB, so the
+/// move would be inaudible almost immediately and read as a cut rather than a fade.
 #[tokio::test(flavor = "multi_thread")]
 async fn fade_to_negative_infinity_ramps_then_places_the_sentinel() {
     let console = MockConsole::start().await;
@@ -271,9 +274,25 @@ async fn fade_to_negative_infinity_ramps_then_places_the_sentinel() {
         NEG_INF,
         "must finish at the sentinel"
     );
+    let ramp = &levels[..levels.len() - 1];
     assert!(
-        levels[..levels.len() - 1].iter().all(|&v| v > NEG_INF),
-        "intermediate steps must stay on the dB scale: {levels:?}"
+        ramp.iter().all(|&v| v >= MIN_DB_RAW),
+        "intermediate steps must stay on the real dB scale (>= -138.00 dB): {levels:?}"
+    );
+    assert!(
+        ramp.iter().all(|&v| v <= 0),
+        "a downward fade must not overshoot upwards: {levels:?}"
+    );
+    // The ramp should actually traverse the scale rather than collapsing to the floor at once.
+    assert!(
+        ramp.iter().any(|&v| v > MIN_DB_RAW / 2),
+        "the fade should spend real time in audible territory: {levels:?}"
+    );
+    // The ramp stops one step short of the floor — the final write is the sentinel itself — but it
+    // must get most of the way down, not bail out early.
+    assert!(
+        *ramp.last().unwrap() <= MIN_DB_RAW * 2 / 3,
+        "the ramp should approach the bottom of the scale before the sentinel is placed: {levels:?}"
     );
 }
 

@@ -67,4 +67,4 @@ pub mod wire;
 pub use connection::{Connection, ConnectionConfig, ConnectionState, Notification, DEFAULT_PORT};
 pub use error::Error;
 pub use mixer::{Curve, Fade, LabelColor, Mixer, SceneList, Strip};
-pub use params::{ParamInfo, ParamTable, NEG_INF};
+pub use params::{ParamInfo, ParamTable, MIN_DB_RAW, NEG_INF};

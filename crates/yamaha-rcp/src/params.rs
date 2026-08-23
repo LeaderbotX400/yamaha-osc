@@ -30,6 +30,15 @@ const TF_TABLE: &str = include_str!("../params/tf.txt");
 /// the console uses this exact sentinel, and a fader set to it reads as "-∞" on the surface.
 pub const NEG_INF: i32 = -32768;
 
+/// The lowest value on the console's actual dB scale, -138.00 dB.
+///
+/// This is *not* the same as a fader parameter's `min`, which the table reports as [`NEG_INF`] —
+/// the sentinel is the bottom of the value range but is not a point on the scale. The distinction
+/// matters when ramping: interpolating between 0 and -32768 would sweep through -327 dB, so a fade
+/// spends almost all of its time inaudible and appears to cut rather than fade. Ramps run to this
+/// floor and then place the sentinel as their final step.
+pub const MIN_DB_RAW: i32 = -138_00;
+
 /// What kind of value a parameter carries on the wire.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValueKind {

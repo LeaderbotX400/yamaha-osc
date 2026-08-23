@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use tracing::trace;
 
 use crate::connection::{Connection, ConnectionConfig, ConnectionState, Notification};
-use crate::params::{ParamInfo, ParamTable, NEG_INF};
+use crate::params::{ParamInfo, ParamTable, MIN_DB_RAW, NEG_INF};
 use crate::wire::{quote, tokenize};
 use crate::Error;
 
@@ -174,7 +174,10 @@ pub enum Curve {
 
 impl Curve {
     /// Map linear progress `0.0..=1.0` onto eased progress.
-    fn shape(self, t: f32) -> f32 {
+    ///
+    /// Public so a caller driving its own ramp (the OSC bridge does, to keep every console write
+    /// funnelling through one queue) produces exactly the same shape as [`Mixer::fade`].
+    pub fn shape(self, t: f32) -> f32 {
         match self {
             Self::Linear => t,
             Self::Cosine => 0.5 - 0.5 * (t * std::f32::consts::PI).cos(),
@@ -441,6 +444,24 @@ impl Mixer {
         Ok(strip.path(&format!("{send}/{leaf}")))
     }
 
+    /// Read a send level in raw console units.
+    pub async fn send_level(&self, strip: Strip, index: u32, dest: u32) -> Result<i32, Error> {
+        self.get_int(&Self::send_path(strip, "Level")?, index, dest)
+            .await
+    }
+
+    /// Set a send level in raw console units.
+    pub async fn set_send_level(
+        &self,
+        strip: Strip,
+        index: u32,
+        dest: u32,
+        level: i32,
+    ) -> Result<(), Error> {
+        self.set_int(&Self::send_path(strip, "Level")?, index, dest, level)
+            .await
+    }
+
     /// Read a send level in decibels (input strips send to mixes, output strips to matrices).
     pub async fn send_db(&self, strip: Strip, index: u32, dest: u32) -> Result<f32, Error> {
         let path = Self::send_path(strip, "Level")?;
@@ -531,12 +552,14 @@ impl Mixer {
             return self.set_int(&path, index, 0, to).await;
         }
 
-        // -∞ is a sentinel, not a value on the dB scale; ramping through it would send the fader
-        // to the bottom on the first step. Start the ramp from the console's real minimum instead
-        // and let the final write place the sentinel.
-        let ramp_from = if from == NEG_INF { info.min } else { from };
-        let ramp_to = if to == NEG_INF { info.min } else { to };
+        // -∞ is a sentinel (-32768), not a point on the dB scale, and it is also the parameter's
+        // reported `min` — so interpolating towards it would sweep the fader down through -327 dB
+        // and the move would be inaudible for all but the first instant of the fade. Ramp to the
+        // bottom of the real scale instead, then place the sentinel as the final step.
+        let ramp_from = if from == NEG_INF { MIN_DB_RAW } else { from };
+        let ramp_to = if to == NEG_INF { MIN_DB_RAW } else { to };
         let span = (ramp_to - ramp_from) as f32;
+        debug_assert!(info.min <= MIN_DB_RAW, "ramp floor must be a legal value");
 
         let mut interval = tokio::time::interval(fade.tick);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);

@@ -681,6 +681,7 @@ dependencies = [
  "rcp-mock",
  "rosc",
  "serde",
+ "thiserror",
  "tokio",
  "toml",
  "tracing",
