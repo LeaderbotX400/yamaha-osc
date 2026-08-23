@@ -1,4 +1,16 @@
 /target
 
+# Cargo.lock IS committed: this workspace ships the `yamaha-osc` binary to a show machine, and a
+# reproducible build matters more than dependency-resolution breadth for the `yamaha-rcp` library.
 # https://doc.rust-lang.org/cargo/faq.html#why-do-binaries-have-cargolock-in-version-control-but-not-libraries
-Cargo.lock
+
+# Devenv
+.devenv*
+devenv.local.nix
+devenv.local.yaml
+
+# direnv
+.direnv
+
+# pre-commit
+.pre-commit-config.yaml
