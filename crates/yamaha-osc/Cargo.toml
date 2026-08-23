@@ -1,0 +1,28 @@
+[package]
+name = "yamaha-osc"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "OSC to Yamaha RCP bridge: drives a Yamaha TF console from QLab network cues."
+publish = false
+
+[[bin]]
+name = "yamaha-osc"
+path = "src/main.rs"
+
+[dependencies]
+yamaha-rcp = { workspace = true }
+
+anyhow = { workspace = true }
+clap = { workspace = true }
+rosc = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true, features = ["signal"] }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+rcp-mock = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
