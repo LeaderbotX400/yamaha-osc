@@ -16,12 +16,12 @@
 //! time, and counting one as a reply would misalign every subsequent command with its response.
 
 use std::collections::VecDeque;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::net::{TcpSocket, TcpStream};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::time::{Instant, MissedTickBehavior};
 use tracing::{debug, trace, warn};
@@ -50,6 +50,13 @@ pub struct ConnectionConfig {
     pub reconnect_min_backoff: Duration,
     /// Ceiling for the reconnect delay.
     pub reconnect_max_backoff: Duration,
+    /// Local interface address to bind the console socket to before connecting.
+    ///
+    /// On a multi-homed host — the common case being a laptop with the console on a USB-Ethernet
+    /// adapter and the internet on Wi-Fi — the OS may pick the wrong source interface for the
+    /// console, which surfaces as intermittent "no route to host". Pinning the source address to
+    /// the console-network interface forces every connect and reconnect out the right one.
+    pub bind_address: Option<IpAddr>,
 }
 
 impl Default for ConnectionConfig {
@@ -61,6 +68,7 @@ impl Default for ConnectionConfig {
             keepalive_interval: Duration::from_secs(10),
             reconnect_min_backoff: Duration::from_millis(100),
             reconnect_max_backoff: Duration::from_secs(5),
+            bind_address: None,
         }
     }
 }
@@ -156,7 +164,7 @@ impl Connection {
 
         // Connect once up front so a typo in the address is reported to the caller rather than
         // disappearing into a reconnect loop.
-        let stream = connect_stream(addr, config.connect_timeout).await?;
+        let stream = connect_stream(addr, config.connect_timeout, config.bind_address).await?;
         let _ = state_tx.send(ConnectionState::Connected);
 
         let response_timeout = config.response_timeout;
@@ -236,15 +244,31 @@ impl Connection {
 ///
 /// The previous implementation called the blocking `std::net::TcpStream::connect_timeout` from
 /// async context, stalling a runtime worker thread for up to the full timeout.
-async fn connect_stream(addr: SocketAddr, timeout: Duration) -> Result<TcpStream, Error> {
-    let stream = tokio::time::timeout(timeout, TcpStream::connect(addr))
-        .await
-        .map_err(|_| {
-            Error::Network(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                format!("connecting to {addr} timed out after {timeout:?}"),
-            ))
-        })??;
+async fn connect_stream(
+    addr: SocketAddr,
+    timeout: Duration,
+    bind: Option<IpAddr>,
+) -> Result<TcpStream, Error> {
+    let connect = async {
+        match bind {
+            // Bind the source address first so the connection leaves via the intended interface.
+            Some(ip) => {
+                let socket = match addr {
+                    SocketAddr::V4(_) => TcpSocket::new_v4()?,
+                    SocketAddr::V6(_) => TcpSocket::new_v6()?,
+                };
+                socket.bind(SocketAddr::new(ip, 0))?;
+                socket.connect(addr).await
+            }
+            None => TcpStream::connect(addr).await,
+        }
+    };
+    let stream = tokio::time::timeout(timeout, connect).await.map_err(|_| {
+        Error::Network(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!("connecting to {addr} timed out after {timeout:?}"),
+        ))
+    })??;
 
     // Without this, Nagle's algorithm holds a small command back waiting for more data to
     // coalesce with, and interacts with the peer's delayed ACK to add tens of milliseconds to a
@@ -273,7 +297,13 @@ impl Actor {
                 Some(s) => s,
                 None => {
                     let _ = self.state.send(ConnectionState::Connecting);
-                    match connect_stream(self.addr, self.config.connect_timeout).await {
+                    match connect_stream(
+                        self.addr,
+                        self.config.connect_timeout,
+                        self.config.bind_address,
+                    )
+                    .await
+                    {
                         Ok(s) => {
                             debug!(addr = %self.addr, "reconnected to console");
                             backoff = self.config.reconnect_min_backoff;

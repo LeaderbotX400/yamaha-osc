@@ -19,6 +19,7 @@ fn test_config() -> ConnectionConfig {
         keepalive_interval: Duration::from_secs(60),
         reconnect_min_backoff: Duration::from_millis(20),
         reconnect_max_backoff: Duration::from_millis(50),
+        bind_address: None,
     }
 }
 
