@@ -1,5 +1,9 @@
 # Deploying `tf-bridge.py` to the theatre MacBook
 
+> **Status: cut over 2026-08-25.** The new bridge is live on UDP :8000 via the `tf3.server` launchd
+> agent (`~/Scripts/tf3.py` now holds the new bridge; original preserved as `~/Scripts/tf3.py.orig`).
+> The steps below are the runbook used, kept for re-deploys and rollback.
+
 The bridge is plain Python 3 + `python-osc` — both already on the Mac. Deployment is copying one
 file and reloading the existing launchd agent. No build, no toolchain, no cross-compile.
 

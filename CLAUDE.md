@@ -1,83 +1,79 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (claude.ai/code) working in this repository.
 
 ## What this is
 
-`yamaha-rcp` is a Rust library (crate name `yamaha-rcp`, published to crates.io, repo `BrenekH/yamaha-rcp-rs`) for
-remote-controlling Yamaha mixing consoles over TCP/IP using Yamaha's Remote Control Protocol (RCP). It is
-pre-1.0 and explicitly unstable — the public API is expected to change without much ceremony. It is developed and
-tested against the Yamaha TF1; other TF-series/CL/QL/DM/Rivage consoles are untested by the maintainer.
+An **OSC → Yamaha TF console bridge**. `bridge/tf-bridge.py` is a small Python service that listens
+for OSC (from QLab) and drives a Yamaha TF mixing console over Yamaha's Remote Control Protocol (RCP,
+newline-terminated ASCII over TCP). It runs on the theatre's booth Mac beside QLab, translating cue
+messages into console moves: faders in dB, curved fades, mutes, sends, labels, mute groups, scenes.
 
-Protocol reference (not in this repo): https://github.com/BrenekH/yamaha-rcp-docs
+Developed and run against a **Yamaha TF3** at `192.168.50.2:49280`. The bridge listens on UDP
+`0.0.0.0:8000`; QLab reaches it on loopback (`127.0.0.1:8000`).
 
-## Environment: devenv
+## Where it runs
 
-The Rust toolchain (rustc/cargo/clippy/rustfmt/rust-analyzer, pinned via `languages.rust.channel = "stable"` in
-`devenv.nix`, resolved through the `rust-overlay` input in `devenv.yaml`) is managed by
-[devenv](https://devenv.sh), not a system-installed Rust. Do not assume a bare `cargo`/`rustc` on `PATH` is this
-project's pinned toolchain — always run through devenv:
-
-- One-off command: `devenv shell -- <cmd>` (e.g. `devenv shell -- cargo test`)
-- Interactive: `devenv shell`, then run `cargo ...` as usual inside it
-
-If a devenv shell is already active (check `$DEVENV_ROOT` / `$IN_NIX_SHELL`), plain `cargo ...` is fine — don't
-re-wrap in another `devenv shell --`.
-
-Changing the toolchain version/components is a `devenv.nix`/`devenv.yaml` edit, not a `rustup` call — this repo has
-no `rustup` toolchain file and shouldn't gain one.
+The service is deployed to the booth Mac (`theatretechs@192.168.50.x`) and kept alive by a user
+launchd agent `tf3.server` (`~/Library/LaunchAgents/tf3.server.plist`), which runs `~/Scripts/tf3.py`
+(that filename now holds this bridge; the venue's original is preserved as `~/Scripts/tf3.py.orig`).
+Interpreter: `/Library/Frameworks/Python.framework/Versions/3.14/bin/python3` (it has `python-osc`;
+the bare `python3` in an ssh shell does not). Logs: `/tmp/tf3.out.log`, `/tmp/tf3.err.log`.
+Deploy/rollback runbook: `bridge/DEPLOY.md`.
 
 ## Commands
 
-(run via `devenv shell --`, see above)
+- Offline logic tests (no console, no `python-osc` needed): `python3 bridge/selftest.py`
+- Send test OSC (stdlib, no deps): `python3 bridge/tools/oscsend.py <host> <port> <address> <args…>`
+- Read the console back over RCP: `printf 'get <PATH> <index> <sub>\n' | nc -w2 192.168.50.2 49280`
 
-- Build: `cargo build`
-- Run the example binary (`src/main.rs`) — connects to a real mixer at `192.168.0.128:49280` and drives faders/labels/mutes: `cargo run`
-- Test: `cargo test`
-- Run a single test: `cargo test <test_name>`
-- Lint: `cargo clippy`
-- Format: `cargo fmt`
+There is no build step and no CI. The bridge is plain Python 3 + `python-osc`.
 
-There is no CI config, no docs build step, and no additional dev tooling beyond stock `cargo` (via devenv).
+## Architecture (`bridge/tf-bridge.py`)
 
-## Architecture
+One process, three concerns:
 
-The entire library lives in `src/lib.rs` as a single module; `src/main.rs` is a manual integration example/harness
-(not an automated test), useful as a reference for the public API surface but requiring a real console on the
-network to actually run.
+- **Console link** — one persistent *blocking* TCP socket with a reconnect loop. Networking is
+  deliberately blocking: on the booth Mac an async runtime proved unreliable on the console's
+  long-lived link, while blocking sockets are rock-solid. A guard (`is_tf_network`) refuses to send
+  unless a local IP is on the `192.168.50.*` subnet — off the console network, cues are dropped.
+- **Write path** — `send()` / `_raw_send()` serialise every console write behind one lock with a
+  5 ms pacing floor, so concurrent fades and direct writes never interleave or outrun the console.
+  Preserve this: correctness of fade-cancel depends on a superseding write setting the fade's stop
+  flag *before* it takes `write_lock`.
+- **OSC vocabulary** — two grammars share the dispatcher:
+  - **Legacy `/tf/mute|unmute|scene`** — *stateful*. `desired_mute_state` vs `applied_mute_state`
+    reconciliation, and mutes are **re-asserted on top of a recalled scene** (clear applied state on
+    scene, re-sync). This is load-bearing show behavior; do not regress it. The token grammar
+    (inputs / `aux` stereo-pairs / `matrix` / `dca` dual-write / `fx` / `st` / `master` / `sub`,
+    with ranges, comma lists and `all`) lives in the `parse_*` / `expand_aux_token` helpers.
+  - **New `/<strip>/<sel>/<param>`** — *direct*, fire-and-forget, last-writer-wins. `on_osc` parses
+    it. Strips map via `STRIP_PATHS`; selectors (number / range / list / `all`) via
+    `parse_range_list`; levels via `db_to_raw` (raw = hundredths of a dB, +10 dB ceiling = `1000`,
+    −∞ sentinel = `-32768`); fades step at 30 Hz in a cancellable per-target thread (`plan` +
+    `_run_fade`), curves in `curve_shape`; sends and labels follow the same builder pattern.
 
-Core type is `TFMixer`, a cheap-to-`Clone` handle (all shared state is behind `Arc<Mutex<...>>`) around a **pooled
-connection** to one mixer:
+Adding a console parameter follows the existing pattern: build the RCP string, route it in `on_osc`
+(or add a `/tf` handler), reuse `send()` / `set_level_direct()` / `start_fade()`. Keep the
+integer-dB-scaling convention (`-6.00 dB` → raw `-600`).
 
-- `TFMixer::new(addr)` opens one initial TCP connection; further connections are opened lazily up to
-  `connection_limit` (default 1, changeable via `set_connection_limit`).
-- Each `Connection` pairs a `tokio::net::tcp::OwnedWriteHalf` with an `mpsc::Receiver<String>` fed by a
-  dedicated background task that owns the read half. That task reads raw bytes, splits on `\n` (0xA), and forwards
-  only lines starting with `"OK"` or `"ERROR"` — this is how request/response correlation is done, since RCP itself
-  has no request IDs.
-- `send_command` is the single choke point for all I/O: it pops a `Connection` from the pool (creating a new one if
-  under the limit, otherwise busy-polling every 10ms for one to free up), writes the command, awaits exactly one
-  line off that connection's channel, and pushes the connection back into the pool when done. Because the pool has
-  no reservation/ticketing, correctness relies on each `send_command` call fully completing its own
-  write-then-single-read before releasing the connection back — do not restructure this into overlapping
-  writes/reads on a shared connection.
-- `request_bool` / `request_int` / `request_string` are thin parsers layered on `send_command` for the three
-  response shapes RCP uses; `request_string` in particular hand-parses quoted, space-containing string values out
-  of a space-delimited response line.
-- Public API methods (`fader_level`, `set_fader_level`, `muted`, `set_muted`, `color`, `set_color`, `label`,
-  `set_label`, `recall_scene`, `fade`) are all just command-string builders on top of the four primitives above.
-  Adding a new console parameter follows this same pattern: build the RCP command string, call the appropriate
-  `request_*`/`send_command` helper, and expose typed getters/setters.
-- `fade` is a client-side ramp: it steps `set_fader_level` on a 50ms tick between two dB values, then snaps to
-  `neg_inf_val` if the target was the minimum (i.e. treats `min_fader_val` as "-inf" on the console).
+## Repo layout
 
-Fader/dB values are represented as scaled integers (hundredths of a dB, e.g. `-10_00` means -10.00 dB) rather than
-floats — `min_fader_val`/`max_fader_val`/`neg_inf_val` on `TFMixer` encode the TF1's valid range and its negative-infinity
-sentinel. Preserve this integer-scaling convention (including the `_` digit-grouping style, which is why
-`clippy::inconsistent_digit_grouping` is allowed) when adding new numeric parameters.
+- `bridge/tf-bridge.py` — the service. `bridge/selftest.py` — offline tests.
+- `bridge/OSC-REFERENCE.md` — full OSC address reference (both grammars).
+- `bridge/docs/tf-bridge-guide.html` — operator manual + OSC dictionary (shareable page).
+- `bridge/qlab/` — QLab cue reference (`QLAB-CUES.md`), the AppleScript generator
+  (`generate.applescript`), and an agent-facing automation guide (`QLAB-AUTOMATION.md`).
+- `bridge/tools/` — stdlib OSC senders. `bridge/reference/` — original `tf3.py` + plist.
+- `bridge/DEPLOY.md`, `bridge/PENDING-LIVE.md` — deploy runbook and live-verification log.
 
-`LabelColor` and `SceneList` are simple enums with hand-written `Display`/`FromStr` (round-tripping through RCP's
-string wire format) rather than relying on `serde` for their string representation, even though they derive
-`Serialize`/`Deserialize` for structural (de)serialization elsewhere.
+`.qlab5` workspaces are binary and hold the theatre's show content; they are gitignored (reproduced
+by `generate.applescript`).
 
-All errors funnel through the single `Error` enum (`thiserror`) covering network/parse/protocol failure modes.
+## History
+
+Evolved from the venue's `tf3.py`. An earlier **Rust** implementation (the `yamaha-rcp` crate,
+upstream at `BrenekH/yamaha-rcp-rs`, plus a `yamaha-osc` bridge) was removed after it proved
+unreliable on the booth Mac (a tokio long-lived-socket issue) and the project settled on the proven
+blocking-Python bridge. If you need the RCP protocol details the Python encodes, read
+`bridge/tf-bridge.py` and `bridge/OSC-REFERENCE.md` — they are now the source of truth.
