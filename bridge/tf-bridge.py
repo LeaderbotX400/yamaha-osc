@@ -38,7 +38,7 @@ CONNECTION_CHECK_INTERVAL = 1.0
 SCENE_RECALL_DELAY = 0.3
 STATE_COMMAND_DELAY = 0.01
 
-# ---- new: level / fade constants (from the Rust spec: params.rs / fade.rs) -------------------
+# ---- level / fade constants ------------------------------------------------------------------
 NEG_INF = -32768          # the console's -inf fader sentinel
 FADER_MAX = 1000          # +10.00 dB, the fader ceiling
 MIN_DB_RAW = -13800       # lowest real dB point; the floor a fade ramps to before -inf
@@ -739,7 +739,7 @@ def on_scene(addr, *args):
 
 def db_to_raw(db):
     """dB float -> console raw units (hundredths of a dB), with the -inf sentinel and clamping.
-    Mirrors params.rs::db_to_raw for a fader (max +10 dB)."""
+    Fader ceiling is +10 dB (raw 1000); anything <= the -inf sentinel snaps to it."""
     if db is None:
         return None
     if db == float("-inf"):
@@ -777,7 +777,7 @@ def curve_shape(name, t):
 
 
 def plan(from_raw, to_raw, duration_ms, curve):
-    """Every value a fade writes, in order, ending exactly on to_raw. Port of fade.rs::plan."""
+    """Every value a fade writes, in order, ending exactly on to_raw."""
     tick_ms = int(FADE_TICK * 1000)
     count = duration_ms // max(tick_ms, 1)
     if count <= 1 or from_raw == to_raw:

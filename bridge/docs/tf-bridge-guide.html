@@ -1,0 +1,650 @@
+<title>TF Bridge Manual</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+  :root {
+    --bg: #eef1f5;
+    --surface: #ffffff;
+    --surface-2: #e7ebf1;
+    --border: #d3dae3;
+    --border-strong: #b9c3ce;
+    --ink: #141c28;
+    --ink-soft: #33404f;
+    --muted: #5c6a7a;
+    --accent: #0c8b93;        /* signal teal — the NEW /ch grammar */
+    --accent-soft: #d7eef0;
+    --accent-ink: #095e63;
+    --legacy: #a9640f;        /* amber — the LEGACY /tf grammar */
+    --legacy-soft: #f3e6d2;
+    --legacy-ink: #7c4809;
+    --code-bg: #f3f5f8;
+    --shadow: 0 1px 2px rgba(20,28,40,.06), 0 8px 24px rgba(20,28,40,.05);
+    --radius: 10px;
+  }
+  :root:not([data-theme="light"]) {
+    @media (prefers-color-scheme: dark) {
+      --bg: #0d1117;
+      --surface: #151b23;
+      --surface-2: #1b232e;
+      --border: #29333f;
+      --border-strong: #3a4756;
+      --ink: #e7ecf3;
+      --ink-soft: #c3cdd9;
+      --muted: #8d9bab;
+      --accent: #38c3cc;
+      --accent-soft: #12333a;
+      --accent-ink: #7fe1e8;
+      --legacy: #e3a94f;
+      --legacy-soft: #34281a;
+      --legacy-ink: #f0c78a;
+      --code-bg: #10161d;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d1117;
+    --surface: #151b23;
+    --surface-2: #1b232e;
+    --border: #29333f;
+    --border-strong: #3a4756;
+    --ink: #e7ecf3;
+    --ink-soft: #c3cdd9;
+    --muted: #8d9bab;
+    --accent: #38c3cc;
+    --accent-soft: #12333a;
+    --accent-ink: #7fe1e8;
+    --legacy: #e3a94f;
+    --legacy-soft: #34281a;
+    --legacy-ink: #f0c78a;
+    --code-bg: #10161d;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  code, pre, .mono { font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 clamp(16px, 4vw, 40px); }
+
+  /* ---- header / hero ---- */
+  header.hero {
+    border-bottom: 1px solid var(--border);
+    background:
+      radial-gradient(120% 140% at 85% -20%, var(--accent-soft) 0%, transparent 55%),
+      var(--surface);
+  }
+  .hero-inner { padding: clamp(28px, 5vw, 56px) 0 clamp(24px, 4vw, 40px); }
+  .eyebrow {
+    font-size: 12px; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--accent-ink); font-weight: 600; margin: 0 0 14px;
+  }
+  h1 {
+    font-size: clamp(2rem, 5vw, 3.1rem); line-height: 1.04; margin: 0 0 14px;
+    font-weight: 700; letter-spacing: -.02em; text-wrap: balance;
+  }
+  .lede { font-size: clamp(1.02rem, 2.2vw, 1.22rem); color: var(--ink-soft); max-width: 58ch; margin: 0; }
+
+  /* signal flow diagram */
+  .flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px; margin: 28px 0 4px; }
+  .node {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 12px 16px; box-shadow: var(--shadow); min-width: 0;
+  }
+  .node .n-role { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+  .node .n-name { font-weight: 600; font-size: .98rem; }
+  .node.bridge { border-color: var(--accent); }
+  .node.bridge .n-name { color: var(--accent-ink); }
+  .hop { display: flex; flex-direction: column; justify-content: center; align-items: center; color: var(--muted); padding: 0 2px; }
+  .hop .h-proto { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--accent-ink); white-space: nowrap; }
+  .hop .h-arrow { font-size: 1.1rem; line-height: 1; }
+  @media (max-width: 640px) {
+    .flow { flex-direction: column; align-items: stretch; }
+    .hop { flex-direction: row; gap: 8px; padding: 2px 0; }
+    .hop .h-arrow { transform: rotate(90deg); }
+  }
+
+  /* ---- layout: sticky TOC + content ---- */
+  .layout { display: grid; grid-template-columns: 1fr; gap: 0; padding: 40px 0 80px; }
+  @media (min-width: 1000px) {
+    .layout { grid-template-columns: 216px minmax(0, 1fr); gap: 48px; }
+  }
+  nav.toc { display: none; }
+  @media (min-width: 1000px) {
+    nav.toc {
+      display: block; position: sticky; top: 20px; align-self: start;
+      max-height: calc(100vh - 40px); overflow-y: auto; font-size: .9rem;
+    }
+    nav.toc .toc-title { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+    nav.toc a {
+      display: block; padding: 5px 12px; color: var(--muted); text-decoration: none;
+      border-left: 2px solid var(--border); transition: color .15s, border-color .15s;
+    }
+    nav.toc a:hover { color: var(--ink); border-left-color: var(--border-strong); }
+    nav.toc a.sub { padding-left: 24px; font-size: .84rem; }
+  }
+
+  main { min-width: 0; }
+  section { margin: 0 0 52px; scroll-margin-top: 20px; }
+  section > h2 {
+    font-size: clamp(1.4rem, 3vw, 1.8rem); font-weight: 700; letter-spacing: -.01em;
+    margin: 0 0 6px; padding-bottom: 10px; border-bottom: 2px solid var(--border); text-wrap: balance;
+  }
+  .sec-intro { color: var(--muted); margin: 10px 0 22px; max-width: 66ch; }
+  h3 { font-size: 1.12rem; font-weight: 600; margin: 32px 0 10px; letter-spacing: -.01em; }
+  h3 .mono { font-size: .92em; }
+  p { max-width: 68ch; }
+  a { color: var(--accent-ink); }
+
+  code:not(pre code) {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 5px;
+    padding: .08em .38em; font-size: .86em; color: var(--ink); white-space: nowrap;
+  }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 16px 18px; overflow-x: auto; font-size: .86rem; line-height: 1.7; margin: 16px 0;
+  }
+  pre code { white-space: pre; }
+  .cmt { color: var(--muted); }
+
+  /* cards / callouts */
+  .grid2 { display: grid; grid-template-columns: 1fr; gap: 16px; margin: 18px 0; }
+  @media (min-width: 620px) { .grid2 { grid-template-columns: 1fr 1fr; } }
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 18px 20px; box-shadow: var(--shadow);
+  }
+  .card h4 { margin: 0 0 8px; font-size: .95rem; font-weight: 600; }
+  .card p { margin: 0; font-size: .92rem; color: var(--ink-soft); }
+
+  .note {
+    border-left: 3px solid var(--accent); background: var(--accent-soft);
+    border-radius: 0 var(--radius) var(--radius) 0; padding: 12px 16px; margin: 18px 0; font-size: .92rem;
+  }
+  .note.warn { border-left-color: var(--legacy); background: var(--legacy-soft); }
+  .note strong { color: var(--ink); }
+
+  .factbar { display: flex; flex-wrap: wrap; gap: 10px; margin: 22px 0 0; }
+  .fact {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 14px; font-size: .84rem; box-shadow: var(--shadow);
+  }
+  .fact b { display: block; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .fact span { font-family: "IBM Plex Mono", monospace; color: var(--ink); font-weight: 500; }
+
+  /* ---- tables ---- */
+  .tbl-wrap { overflow-x: auto; margin: 16px 0; border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; background: var(--surface); }
+  thead th {
+    text-align: left; font-weight: 600; font-size: 12px; letter-spacing: .05em; text-transform: uppercase;
+    color: var(--muted); padding: 11px 14px; background: var(--surface-2); border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  tbody td { padding: 11px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--surface-2); }
+  td .mono, th .mono { font-size: .92em; }
+  td.addr { white-space: nowrap; }
+  td.addr .mono { color: var(--accent-ink); font-weight: 500; }
+  table.legacy td.addr .mono { color: var(--legacy-ink); }
+  .arg { color: var(--muted); }
+
+  .pill {
+    display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: .04em;
+    padding: 2px 9px; border-radius: 20px; vertical-align: middle;
+  }
+  .pill.new { background: var(--accent-soft); color: var(--accent-ink); border: 1px solid var(--accent); }
+  .pill.leg { background: var(--legacy-soft); color: var(--legacy-ink); border: 1px solid var(--legacy); }
+  .pill.state { background: transparent; color: var(--muted); border: 1px solid var(--border-strong); }
+
+  /* colour chips */
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
+  .chip { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 20px; padding: 4px 12px 4px 4px; background: var(--surface); font-size: .84rem; }
+  .chip .sw { width: 18px; height: 18px; border-radius: 50%; border: 1px solid rgba(0,0,0,.15); }
+  .chip .mono { font-size: .82rem; }
+
+  /* theme toggle */
+  .toggle {
+    position: fixed; top: 14px; right: 14px; z-index: 20;
+    background: var(--surface); border: 1px solid var(--border-strong); color: var(--ink-soft);
+    border-radius: 20px; padding: 6px 13px; font-size: .8rem; font-family: inherit; cursor: pointer;
+    box-shadow: var(--shadow); display: inline-flex; align-items: center; gap: 6px;
+  }
+  .toggle:hover { border-color: var(--accent); color: var(--accent-ink); }
+  .toggle:focus-visible, a:focus-visible, .toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  footer { border-top: 1px solid var(--border); padding: 28px 0 60px; color: var(--muted); font-size: .86rem; }
+  footer .mono { color: var(--ink-soft); }
+  .kbd { font-family: "IBM Plex Mono", monospace; font-size: .82em; background: var(--surface-2); border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; }
+</style>
+
+<button class="toggle" id="themeToggle" aria-label="Toggle light or dark theme">◐ Theme</button>
+
+<header class="hero">
+  <div class="wrap hero-inner">
+    <p class="eyebrow">Show-control reference · Yamaha TF</p>
+    <h1>TF Bridge</h1>
+    <p class="lede">A small always-on service on the booth Mac that turns QLab OSC cues into Yamaha
+      TF console moves — faders, fades, mutes, sends, labels and scene recalls — over the console's
+      Remote Control Protocol.</p>
+
+    <div class="flow" role="img" aria-label="Signal flow: QLab sends OSC over UDP 8000 to the TF Bridge, which sends RCP over TCP 49280 to the Yamaha TF3 console.">
+      <div class="node"><div class="n-role">Sends cues</div><div class="n-name">QLab 5</div></div>
+      <div class="hop"><span class="h-proto">OSC · UDP 8000</span><span class="h-arrow">→</span></div>
+      <div class="node bridge"><div class="n-role">This service</div><div class="n-name">tf-bridge.py</div></div>
+      <div class="hop"><span class="h-proto">RCP · TCP 49280</span><span class="h-arrow">→</span></div>
+      <div class="node"><div class="n-role">Mixing console</div><div class="n-name">Yamaha TF3</div></div>
+    </div>
+
+    <div class="factbar">
+      <div class="fact"><b>Listens on</b><span>UDP 0.0.0.0:8000</span></div>
+      <div class="fact"><b>Console</b><span>192.168.50.2:49280</span></div>
+      <div class="fact"><b>QLab patch</b><span>TF3 → 127.0.0.1:8000</span></div>
+      <div class="fact"><b>Runs as</b><span>launchd · tf3.server</span></div>
+    </div>
+  </div>
+</header>
+
+<div class="wrap layout">
+  <nav class="toc" aria-label="Contents">
+    <p class="toc-title">Contents</p>
+    <a href="#overview">Overview</a>
+    <a href="#qlab">Using it from QLab</a>
+    <a href="#dictionary">OSC dictionary</a>
+    <a href="#conventions" class="sub">Conventions</a>
+    <a href="#strips" class="sub">Strips &amp; selectors</a>
+    <a href="#new-grammar" class="sub">New grammar</a>
+    <a href="#sends" class="sub">Sends</a>
+    <a href="#scenes-groups" class="sub">Scenes &amp; mute groups</a>
+    <a href="#legacy" class="sub">Legacy /tf</a>
+    <a href="#behavior">How it behaves</a>
+    <a href="#ops">Running &amp; operations</a>
+    <a href="#troubleshoot">Troubleshooting</a>
+  </nav>
+
+  <main>
+    <section id="overview">
+      <h2>Overview</h2>
+      <p class="sec-intro">One Python service, one job: listen for OSC on the network and drive the
+        console. Everything you fire from QLab is a plain OSC message to UDP port 8000 on the Mac.</p>
+
+      <p>QLab, the bridge, and the console share the booth Mac's wired connection. QLab sends OSC to
+        <code>127.0.0.1:8000</code> (loopback — the bridge is on the same machine); the bridge holds one
+        long-lived TCP connection to the console at <code>192.168.50.2:49280</code> and translates each
+        message into Yamaha's Remote Control Protocol (RCP).</p>
+
+      <div class="grid2">
+        <div class="card">
+          <h4>Two dialects, one service</h4>
+          <p>A rich <span class="pill new">new</span> <code>/ch · /mix · /dca …</code> grammar for
+            faders, fades, sends and labels — and the original
+            <span class="pill leg">/tf</span> mute/scene addresses, kept working so existing show files
+            need no changes.</p>
+        </div>
+        <div class="card">
+          <h4>Built for the booth</h4>
+          <p>Blocking sockets (proven rock-solid on this Mac), a reconnect loop, and a guard that only
+            talks to the console when the Mac is actually on the <code>192.168.50.x</code> network.</p>
+        </div>
+      </div>
+
+      <div class="note">
+        <strong>A “safety catch” you can rely on.</strong> The bridge refuses to send anything unless
+        one of the Mac's own IP addresses is on the <code>192.168.50.*</code> subnet. Off the console
+        network, cues are silently dropped rather than sent somewhere unexpected.
+      </div>
+    </section>
+
+    <section id="qlab">
+      <h2>Using it from QLab</h2>
+      <p class="sec-intro">Every bridge cue is a QLab <strong>Network</strong> cue whose destination is
+        the <strong>TF3</strong> patch and whose message is one line from the dictionary below.</p>
+
+      <h3>The one-time setup (already done on the booth Mac)</h3>
+      <p>Settings → Network → OSC has a UDP patch named <strong>TF3</strong> pointed at
+        <code>127.0.0.1</code> port <code>8000</code>, kept <em>first</em> in the list. Because it's first,
+        new Network cues default to it — no per-cue destination fiddling.</p>
+
+      <h3>Making a cue</h3>
+      <ol>
+        <li>Add a <strong>Network</strong> cue (or duplicate one from the <strong>TF BRIDGE TEMPLATES</strong>
+          group in <code>TF Bridge Template.qlab5</code>).</li>
+        <li>Confirm its <strong>Destination</strong> is <strong>TF3</strong>.</li>
+        <li>Set the message to one line below, e.g. <code>/ch/5/fader -6</code>.</li>
+        <li>Name and number the cue for your show.</li>
+      </ol>
+
+      <div class="note warn">
+        <strong>Quoting matters.</strong> QLab splits the message on spaces. A text value that contains a
+        space must be quoted: <code>/ch/1/name "Lead Vox"</code> sends one string; without quotes QLab
+        sends two. Numbers like <code>-6</code> or <code>2000</code> are sent as numbers — the bridge
+        accepts either.
+      </div>
+
+      <h3>A ready-made palette</h3>
+      <p>The <strong>TF BRIDGE TEMPLATES</strong> group ships one labelled cue per function — copy a cue,
+        change the channel number and value, done. It's regenerated by
+        <code>bridge/qlab/generate.applescript</code> if you ever want to rebuild or extend it.</p>
+    </section>
+
+    <section id="dictionary">
+      <h2>OSC dictionary</h2>
+      <p class="sec-intro">The complete address set the bridge understands. New-grammar addresses are
+        <span class="pill new">teal</span>; legacy <span class="pill leg">/tf</span> addresses are amber.
+        Channel and bus numbers are <strong>1-based</strong>, matching the console surface (channel 1 on
+        the desk = <code>/ch/1/…</code>).</p>
+    </section>
+
+    <section id="conventions">
+      <h2>Conventions</h2>
+      <p class="sec-intro">Four things recur across every address: how levels are written, how fades
+        curve, how you pick more than one channel at once, and the −∞ sentinel.</p>
+
+      <h3>Levels are in dB</h3>
+      <p>A fader/level argument is decibels: <code>0</code>, <code>-6</code>, <code>-6.5</code>,
+        <code>3.2</code>. The ceiling is <strong>+10 dB</strong>; the floor is <strong>−∞</strong>, written
+        <code>-inf</code> (or any value ≤ about −327 dB). Internally the console works in hundredths of a
+        dB — the bridge does that conversion for you (e.g. <code>-6</code> → raw <code>-600</code>,
+        <code>-inf</code> → <code>-32768</code>). If you ever need raw units directly, use
+        <code>/…/fader/raw</code>.</p>
+
+      <h3>Fades ride a curve</h3>
+      <p>A <code>fade</code> takes a target dB and a duration in <strong>milliseconds</strong>, then steps
+        the fader at 30 Hz until it lands exactly on target. A later fade or fader on the same target
+        cancels the one in flight (last writer wins). Curve names:</p>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Curve</th><th>Aliases</th><th>Feel</th></tr></thead>
+        <tbody>
+          <tr><td><code>linear</code></td><td class="arg mono">lin</td><td>Constant rate — the default.</td></tr>
+          <tr><td><code>cosine</code></td><td class="arg mono">cos · s · scurve</td><td>Eases in and out — natural for level moves.</td></tr>
+          <tr><td><code>exp</code></td><td class="arg mono">exponential</td><td>Slow start, fast finish (t²).</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>Selectors pick one or many</h3>
+      <p>Where an address has a <code>&lt;sel&gt;</code>, you can address a single number, a range, or a
+        comma list — all in one cue:</p>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Selector</th><th>Means</th></tr></thead>
+        <tbody>
+          <tr><td><code>5</code></td><td>Channel 5</td></tr>
+          <tr><td><code>1-8</code></td><td>Channels 1 through 8</td></tr>
+          <tr><td><code>1,3,5</code></td><td>Channels 1, 3 and 5</td></tr>
+          <tr><td><code>all</code></td><td>Every channel on that strip</td></tr>
+        </tbody>
+      </table></div>
+      <p class="arg">Out-of-range numbers are dropped; the console ignores anything it doesn't have.</p>
+    </section>
+
+    <section id="strips">
+      <h2>Strips &amp; selectors</h2>
+      <p class="sec-intro">The first path segment names a strip. Each maps to a console section and has a
+        maximum count.</p>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Strip word</th><th>Console section</th><th>Count</th><th>Sends to</th></tr></thead>
+        <tbody>
+          <tr><td><code>ch</code> <span class="arg">/ <code>input</code></span></td><td>Input channels</td><td>40</td><td>mix</td></tr>
+          <tr><td><code>stin</code></td><td>Stereo input channels</td><td>20</td><td>mix</td></tr>
+          <tr><td><code>fxrtn</code></td><td>FX returns</td><td>4</td><td>mix</td></tr>
+          <tr><td><code>dca</code></td><td>DCA groups</td><td>8</td><td>—</td></tr>
+          <tr><td><code>mix</code></td><td>Mix buses</td><td>20</td><td>matrix</td></tr>
+          <tr><td><code>mtrx</code> <span class="arg">/ <code>matrix</code></span></td><td>Matrices</td><td>4</td><td>—</td></tr>
+          <tr><td><code>st</code> <span class="arg">/ <code>stereo</code></span></td><td>Stereo master</td><td>2</td><td>matrix</td></tr>
+          <tr><td><code>mono</code></td><td>Mono master</td><td>1</td><td>matrix</td></tr>
+        </tbody>
+      </table></div>
+      <p class="arg">“Sends to” is the bus a send from that strip targets — see <a href="#sends">Sends</a>.</p>
+    </section>
+
+    <section id="new-grammar">
+      <h2>New grammar <span class="pill new">/ch · /mix · /dca …</span></h2>
+      <p class="sec-intro">Pattern: <code class="mono">/&lt;strip&gt;/&lt;sel&gt;/&lt;param&gt; &lt;args&gt;</code>.
+        These are <span class="pill state">direct</span> — fired immediately, last-writer-wins. (Only
+        <code>/tf</code> mutes and scene recalls are re-asserted after a scene; see
+        <a href="#behavior">How it behaves</a>.)</p>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Address</th><th>Args</th><th>Effect</th></tr></thead>
+        <tbody>
+          <tr><td class="addr"><span class="mono">/&lt;strip&gt;/&lt;sel&gt;/fader</span></td><td><span class="mono">&lt;dB&gt;</span> <span class="arg">or</span> <span class="mono">-inf</span></td><td>Set fader level in dB. Ceiling +10 dB.</td></tr>
+          <tr><td class="addr"><span class="mono">/&lt;strip&gt;/&lt;sel&gt;/fader/raw</span></td><td><span class="mono">&lt;raw&gt;</span></td><td>Set level in raw units (hundredths of dB; −32768 = −∞).</td></tr>
+          <tr><td class="addr"><span class="mono">/&lt;strip&gt;/&lt;sel&gt;/fade</span></td><td><span class="mono">&lt;dB&gt; &lt;ms&gt; [curve] [fromDB]</span></td><td>Ramp to <span class="mono">dB</span> over <span class="mono">ms</span>. A later move cancels it.</td></tr>
+          <tr><td class="addr"><span class="mono">/&lt;strip&gt;/&lt;sel&gt;/on</span></td><td><span class="mono">0</span> <span class="arg">|</span> <span class="mono">1</span></td><td>Channel on/off (1 = on).</td></tr>
+          <tr><td class="addr"><span class="mono">/&lt;strip&gt;/&lt;sel&gt;/mute</span></td><td><span class="mono">0</span> <span class="arg">|</span> <span class="mono">1</span></td><td>Mute (1 = muted = fader off).</td></tr>
+          <tr><td class="addr"><span class="mono">/&lt;strip&gt;/&lt;sel&gt;/name</span></td><td><span class="mono">"text"</span></td><td>Set the channel name (quote if it has spaces).</td></tr>
+          <tr><td class="addr"><span class="mono">/&lt;strip&gt;/&lt;sel&gt;/color</span></td><td><span class="mono">Blue</span></td><td>Set the label colour (see the swatches below).</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>Label colours</h3>
+      <p>Use the console's exact names, capitalised as shown — <code>/ch/3/color SkyBlue</code>:</p>
+      <div class="chips" id="colorchips" aria-hidden="true"></div>
+
+      <h3>Examples</h3>
+      <pre><code>/ch/5/fader -6           <span class="cmt"># input 5 to −6 dB</span>
+/ch/5/fader -inf         <span class="cmt"># input 5 to −∞</span>
+/ch/1-8/mute 1           <span class="cmt"># mute inputs 1..8 in one cue</span>
+/ch/5/fade -30 2000 cosine   <span class="cmt"># glide to −30 dB over 2 s</span>
+/ch/5/name "Lead Vox"    <span class="cmt"># rename channel 5</span>
+/mix/3/fader 0           <span class="cmt"># mix bus 3 master to 0 dB</span>
+/st/1/fader -3           <span class="cmt"># stereo master to −3 dB</span></code></pre>
+    </section>
+
+    <section id="sends">
+      <h2>Sends</h2>
+      <p class="sec-intro">A send routes one strip to a destination bus. Input-type strips send to
+        <strong>mix</strong>; output-type strips (mix/stereo/mono) send to <strong>matrix</strong>.
+        Destination numbers are 1-based.</p>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Address</th><th>Args</th><th>Effect</th></tr></thead>
+        <tbody>
+          <tr><td class="addr"><span class="mono">/&lt;strip&gt;/&lt;sel&gt;/send/mix/&lt;dest&gt;/fader</span></td><td><span class="mono">&lt;dB&gt;</span></td><td>Input → mix send level.</td></tr>
+          <tr><td class="addr"><span class="mono">/&lt;strip&gt;/&lt;sel&gt;/send/mix/&lt;dest&gt;/on</span></td><td><span class="mono">0</span> <span class="arg">|</span> <span class="mono">1</span></td><td>Input → mix send on/off.</td></tr>
+          <tr><td class="addr"><span class="mono">/&lt;strip&gt;/&lt;sel&gt;/send/mix/&lt;dest&gt;/fade</span></td><td><span class="mono">&lt;dB&gt; &lt;ms&gt; [curve]</span></td><td>Ramp a send level.</td></tr>
+          <tr><td class="addr"><span class="mono">/&lt;strip&gt;/&lt;sel&gt;/send/mtrx/&lt;dest&gt;/…</span></td><td><span class="arg">same leaves</span></td><td>Output strips (mix/st/mono) → matrix instead.</td></tr>
+        </tbody>
+      </table></div>
+      <pre><code>/ch/1/send/mix/3/fader -12   <span class="cmt"># input 1 into mix 3 at −12 dB</span>
+/ch/1/send/mix/3/on 1        <span class="cmt"># turn that send on</span>
+/mix/2/send/mtrx/1/fader -6  <span class="cmt"># mix 2 into matrix 1</span></code></pre>
+      <div class="note">Using the wrong bus word for a strip (e.g. asking an input to send to
+        <code>mtrx</code>) is rejected and logged, not sent.</div>
+    </section>
+
+    <section id="scenes-groups">
+      <h2>Scenes &amp; mute groups</h2>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Address</th><th>Args</th><th>Effect</th></tr></thead>
+        <tbody>
+          <tr><td class="addr"><span class="mono">/scene/recall</span></td><td><span class="mono">a</span> <span class="arg">|</span> <span class="mono">b</span> &nbsp; <span class="mono">&lt;n&gt;</span></td><td>Recall scene <span class="mono">n</span> (0–99) from bank A or B. <span class="pill state">stateful</span> — mutes re-assert on top.</td></tr>
+          <tr><td class="addr"><span class="mono">/mutegroup/&lt;sel&gt;</span></td><td><span class="mono">0</span> <span class="arg">|</span> <span class="mono">1</span></td><td>Engage/release mute group(s) 1–6.</td></tr>
+        </tbody>
+      </table></div>
+      <pre><code>/scene/recall a 12       <span class="cmt"># recall scene A12</span>
+/scene/recall b 3        <span class="cmt"># recall scene B03</span>
+/mutegroup/1 1           <span class="cmt"># engage mute group 1  (0 = release)</span></code></pre>
+    </section>
+
+    <section id="legacy">
+      <h2>Legacy <span class="pill leg">/tf</span> grammar</h2>
+      <p class="sec-intro">The original addresses, unchanged — existing show cues keep working. These
+        mutes are <span class="pill state">stateful</span>: the bridge remembers what you muted and
+        re-asserts it after a scene recall.</p>
+      <div class="tbl-wrap"><table class="legacy">
+        <thead><tr><th>Address</th><th>Args</th><th>Effect</th></tr></thead>
+        <tbody>
+          <tr><td class="addr"><span class="mono">/tf/mute</span></td><td><span class="mono">&lt;tokens…&gt;</span></td><td>Mute the listed things (token grammar below).</td></tr>
+          <tr><td class="addr"><span class="mono">/tf/unmute</span></td><td><span class="mono">&lt;tokens…&gt;</span></td><td>Unmute the same tokens.</td></tr>
+          <tr><td class="addr"><span class="mono">/tf/scene</span></td><td><span class="mono">A&lt;n&gt;</span> <span class="arg">|</span> <span class="mono">B&lt;n&gt;</span></td><td>Recall a scene (e.g. <code>A12</code>); mutes re-assert afterward.</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>Mute token grammar</h3>
+      <p>Tokens are space- or comma-separated, and ranges/lists/<code>all</code> work throughout
+        (<code>/tf/mute 1, 4, 7-12, 15</code>):</p>
+      <div class="tbl-wrap"><table class="legacy">
+        <thead><tr><th>Token</th><th>Targets</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">1  ·  7-12  ·  all</td><td>Input channels (bare numbers)</td></tr>
+          <tr><td class="mono">aux &lt;n&gt;</td><td>Mix buses — stereo-pair aware (<code>aux 9</code> covers the 9/10 pair; <code>aux 9/10</code> also works)</td></tr>
+          <tr><td class="mono">matrix &lt;n&gt;</td><td>Matrices 1–4</td></tr>
+          <tr><td class="mono">dca &lt;n&gt;</td><td>DCA groups 1–8 (writes both DCA + DcaCh)</td></tr>
+          <tr><td class="mono">fx1 · fx2</td><td>FX returns (each covers its stereo pair)</td></tr>
+          <tr><td class="mono">st1 · st2</td><td>Stereo input channels</td></tr>
+          <tr><td class="mono">master</td><td>Stereo master (L/R)</td></tr>
+          <tr><td class="mono">sub</td><td>Mono / sub master</td></tr>
+        </tbody>
+      </table></div>
+      <pre><code>/tf/mute 1, 4, 7-12, 15    <span class="cmt"># the real-world show syntax</span>
+/tf/mute all               <span class="cmt"># everything</span>
+/tf/mute aux 9  dca 1      <span class="cmt"># a mix pair and a DCA</span>
+/tf/unmute all
+/tf/scene A05              <span class="cmt"># recall scene A05</span></code></pre>
+    </section>
+
+    <section id="behavior">
+      <h2>How it behaves</h2>
+      <p class="sec-intro">The one distinction worth internalising: <strong>mutes are remembered, levels
+        are not.</strong></p>
+      <div class="grid2">
+        <div class="card">
+          <h4><span class="pill state">stateful</span> Legacy <code>/tf</code> mutes &amp; scenes</h4>
+          <p>The bridge tracks what you've muted. Recall a scene and it re-applies those mutes on top of
+            the freshly-loaded scene — so a channel you killed stays killed across a scene change.</p>
+        </div>
+        <div class="card">
+          <h4><span class="pill state">direct</span> New-grammar levels, fades, sends, <code>/ch</code> mutes</h4>
+          <p>Fired straight to the console, last-writer-wins, and <em>not</em> re-asserted after a scene.
+            Use these for moment-to-moment moves; use <code>/tf</code> mutes for state you want held
+            through scene changes.</p>
+        </div>
+      </div>
+      <div class="note">
+        <strong>Fades are cancellable.</strong> Starting a new fade — or any direct fader write — on a
+        target that's mid-fade cancels the old one cleanly and the new move wins. Concurrent fades on
+        many channels are paced so the console never floods.
+      </div>
+      <h3>Connection handling</h3>
+      <p>The bridge keeps one connection open and reconnects automatically if the console blips. On a
+        fresh connection it re-syncs its remembered mute state. If the Mac isn't on the
+        <code>192.168.50.x</code> network, it parks in a <code>NO_TF_NETWORK</code> state and sends
+        nothing until it is.</p>
+    </section>
+
+    <section id="ops">
+      <h2>Running &amp; operations</h2>
+      <p class="sec-intro">The bridge is plain Python 3 + <code>python-osc</code>, kept alive by a user
+        launchd agent. No build step, no toolchain.</p>
+
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Thing</th><th>Where</th></tr></thead>
+        <tbody>
+          <tr><td>Service (launchd)</td><td class="mono">tf3.server &nbsp;<span class="arg">(~/Library/LaunchAgents/tf3.server.plist)</span></td></tr>
+          <tr><td>Script it runs</td><td class="mono">~/Scripts/tf3.py &nbsp;<span class="arg">(holds the current bridge)</span></td></tr>
+          <tr><td>Original, for rollback</td><td class="mono">~/Scripts/tf3.py.orig</td></tr>
+          <tr><td>Interpreter</td><td class="mono">…/Python.framework/Versions/3.14/bin/python3</td></tr>
+          <tr><td>Logs</td><td class="mono">/tmp/tf3.out.log &nbsp;·&nbsp; /tmp/tf3.err.log</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>Restart / reload</h3>
+      <pre><code>launchctl bootout   gui/$(id -u)/tf3.server
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/tf3.server.plist
+tail -f /tmp/tf3.out.log      <span class="cmt"># expect: "OSC server listening on 0.0.0.0:8000" then "TF CONNECTED"</span></code></pre>
+
+      <h3>Roll back to the old bridge</h3>
+      <pre><code>cp ~/Scripts/tf3.py.orig ~/Scripts/tf3.py
+launchctl bootout   gui/$(id -u)/tf3.server
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/tf3.server.plist</code></pre>
+
+      <h3>Settings you can change</h3>
+      <p>Constants live at the top of the script; each also has an environment-variable override (handy
+        for running a test instance on another port beside the live one):</p>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Env var</th><th>Default</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">TF_IP</td><td class="mono">192.168.50.2</td><td>Console address</td></tr>
+          <tr><td class="mono">TF_PORT</td><td class="mono">49280</td><td>Console RCP port</td></tr>
+          <tr><td class="mono">TF_OSC_IP</td><td class="mono">0.0.0.0</td><td>Interface to listen on</td></tr>
+          <tr><td class="mono">TF_OSC_PORT</td><td class="mono">8000</td><td>OSC listen port</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="troubleshoot">
+      <h2>Troubleshooting</h2>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Symptom</th><th>Likely cause &amp; fix</th></tr></thead>
+        <tbody>
+          <tr><td>A cue does nothing</td><td>Check the cue's <strong>Destination</strong> is <strong>TF3</strong> (→ 127.0.0.1:8000). A cue on the wrong patch goes nowhere. Watch <code>/tmp/tf3.out.log</code> — a received message logs a <code>SEND:</code> line.</td></tr>
+          <tr><td>Nothing works at all</td><td>Log shows <code>NO_TF_NETWORK</code> → the Mac isn't on the console's wired network. Reconnect the cable / check the interface is on <code>192.168.50.x</code>.</td></tr>
+          <tr><td>Log shows <code>CONNECTING</code> looping</td><td>Console unreachable at <code>192.168.50.2:49280</code> — powered on? same switch? The bridge retries every 2 s and recovers on its own.</td></tr>
+          <tr><td>A name didn't take</td><td>Multi-word name wasn't quoted, so only the first word arrived. Use <code>/ch/1/name "Two Words"</code>.</td></tr>
+          <tr><td>A colour didn't take</td><td>Use the exact capitalised name (<code>Blue</code>, <code>SkyBlue</code>). Bad colours are logged, not sent.</td></tr>
+          <tr><td>Mute came back after a scene</td><td>Expected for <code>/tf</code> mutes — they're re-asserted on top of recalled scenes. Use a new-grammar <code>/ch/N/mute</code> if you want a non-sticky mute.</td></tr>
+        </tbody>
+      </table></div>
+      <div class="note">Every received message and console write is logged with a <code>SEND:</code> line,
+        and state changes log <code>DESIRED:</code> / <code>SYNC:</code> / <code>SCENE:</code>. When in
+        doubt, <code>tail -f /tmp/tf3.out.log</code> and fire the cue.</div>
+    </section>
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    <p>TF Bridge · <span class="mono">bridge/tf-bridge.py</span> on the booth Mac. Full address
+      reference also lives in <span class="mono">bridge/OSC-REFERENCE.md</span>; QLab cue reference in
+      <span class="mono">bridge/qlab/QLAB-CUES.md</span>. Press <span class="kbd">T</span> to flip theme.</p>
+  </div>
+</footer>
+
+<script>
+  // Console label colours — real swatches
+  var COLORS = [
+    ["Purple", "#8b5cd6"], ["Pink", "#e06aa8"], ["Red", "#d84b4b"], ["Orange", "#e08a3c"],
+    ["Yellow", "#e6c033"], ["Blue", "#3f7fd8"], ["SkyBlue", "#48b4e0"], ["Green", "#4CA85f"]
+  ];
+  var box = document.getElementById("colorchips");
+  if (box) {
+    COLORS.forEach(function (c) {
+      var el = document.createElement("span");
+      el.className = "chip";
+      el.innerHTML = '<span class="sw" style="background:' + c[1] + '"></span><span class="mono">' + c[0] + '</span>';
+      box.appendChild(el);
+    });
+    box.setAttribute("aria-hidden", "false");
+  }
+
+  // Theme toggle: cycles this page between light and dark, remembered per-viewer.
+  (function () {
+    var root = document.documentElement;
+    var btn = document.getElementById("themeToggle");
+    function stored() { try { return localStorage.getItem("tfbridge-theme"); } catch (e) { return null; } }
+    var s = stored();
+    if (s === "light" || s === "dark") root.setAttribute("data-theme", s);
+    function current() {
+      var t = root.getAttribute("data-theme");
+      if (t) return t;
+      return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    }
+    function flip() {
+      var next = current() === "dark" ? "light" : "dark";
+      root.setAttribute("data-theme", next);
+      try { localStorage.setItem("tfbridge-theme", next); } catch (e) {}
+    }
+    if (btn) btn.addEventListener("click", flip);
+    document.addEventListener("keydown", function (e) {
+      if ((e.key === "t" || e.key === "T") && !/input|textarea/i.test(e.target.tagName)) flip();
+    });
+  })();
+</script>

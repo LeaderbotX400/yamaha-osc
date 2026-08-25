@@ -1,16 +1,14 @@
-/target
+# Python
+__pycache__/
+*.py[cod]
 
-# Cargo.lock IS committed: this workspace ships the `yamaha-osc` binary to a show machine, and a
-# reproducible build matters more than dependency-resolution breadth for the `yamaha-rcp` library.
-# https://doc.rust-lang.org/cargo/faq.html#why-do-binaries-have-cargolock-in-version-control-but-not-libraries
+# QLab workspaces are binary and hold the theatre's proprietary show content. They live on the
+# booth Mac (and are reproduced by bridge/qlab/generate.applescript), so they are not tracked here.
+bridge/qlab/templates/
+*.qlab5
 
-# Devenv
-.devenv*
-devenv.local.nix
-devenv.local.yaml
+# Editor / OS
+.DS_Store
 
-# direnv
-.direnv
-
-# pre-commit
-.pre-commit-config.yaml
+# Claude Code session checkpoint
+.claude/RESUME.md
