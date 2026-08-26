@@ -58,6 +58,30 @@ Workflow for a new cue by hand: **new Network cue → paste a message string bel
 Curves for `fade`: `linear`, `cosine` (default if omitted), `exp`. A later `fade`/`fader` on the
 same channel cancels an in‑progress fade.
 
+## Two ways to fade a channel
+
+There are two ways to glide a fader, and they're both useful:
+
+**1. Bridge fade** — `/ch/1/fade -30 2000 cosine` (rows #103/#104 above). One cue, one message; the
+*bridge* runs the ramp. Simple, and the console keeps moving even if QLab is busy.
+
+**2. QLab‑native fade** — let QLab run the ramp and send interpolated levels, so you get QLab's fade
+curve editor, live preview, and timeline scrubbing. Set it up on a **Network cue**:
+
+| Field | Value |
+|---|---|
+| Message | `/ch/1/fader #v#` |
+| Fade (dropdown) | **1D Fade** |
+| From / To | `0` / `-30`  (dB) |
+| Duration | e.g. `3` (seconds) |
+| fps | `30` |
+| Curve | linear, or shape it in the editor |
+
+QLab replaces `#v#` with the interpolated value and sends `/ch/1/fader <db>` many times a second;
+the bridge takes each one. Cue **#531** in the template group is this, pre‑built — just set the Fade
+dropdown to *1D Fade* and pick your From/To. (Fade to −∞ isn't possible this way — the number can't
+reach −inf; use a bridge `/ch/1/fade … -inf` or a final `/ch/1/fader -inf` for that.)
+
 ## Sends (input → mix bus)
 
 | Suggested name | # | OSC message | Effect |
