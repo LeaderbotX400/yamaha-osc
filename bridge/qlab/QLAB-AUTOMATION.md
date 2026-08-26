@@ -137,6 +137,30 @@ tell application "QLab" to tell front workspace
 end tell
 ```
 
+### Slice markers, pre-waits, timeline groups (verified 5.6.3)
+For triggering things at points in a song:
+- `slice markers of anAudioCue` → a list of slice objects; `time of aSlice` is its offset in seconds.
+- `pre wait of aCue` is settable (real seconds) — in a **Timeline** group, a child fires at its
+  pre-wait offset from the group start. Build "do X at 0:12, Y at 0:45" as a timeline group of cues
+  with those pre-waits. `move c to end of grp` to nest.
+- Working generator: `generate_eos_triggers.applescript` (reads a song's slices → one
+  `/eos/cue/<n>/fire` Network cue per slice, pre-wait matched). Caveat: patch still isn't scriptable,
+  so the generated cues need Destination set to the Eos patch manually.
+- Avoid `times` as a variable name (parser reserves it); `timeline` as a bare enum for `set mode of
+  grp to timeline` was unreliable — set the group's Timeline mode in the GUI.
+
+### QLab-native OSC fade (fade a value QLab-side, not via the bridge)
+A Network cue can fade a number in its message itself: set the **Fade** popup to **1D Fade**, give it
+a **Duration**, **From**/**To** values, and put the token **`#v#`** in the message where the value
+goes (`/ch/1/fader #v#`). QLab sends the interpolated message at the chosen **fps**. `custom message`
+and `duration` are scriptable; the 1D-fade mode + From/To live in the GUI fade editor (not reliably
+scriptable), so pre-build the message + duration and leave the mode toggle to the user.
+
+### Show mode blocks editing
+If `make type "Network"` suddenly fails with **-2710 "Could not make cue"** and it worked before, the
+workspace is in **Show mode**. Cues can only be created/edited in **Edit mode** (⌘E / the Edit·Show
+toggle) — a GUI switch. Ask the user to flip it.
+
 ### Opening / saving
 `open POSIX file "/path/to/x.qlab5"` opens a workspace and makes it front (QLab keeps multiple open;
 verify with `path of front workspace`). `save` (inside `tell front workspace`) writes it to disk.
@@ -235,6 +259,10 @@ save. Rewriting a single scalar (e.g. a patch `port`) is comparatively safe, but
 - [ ] Always `timeout` the ssh, and expect a one-time GUI auth dialog on first workspace access.
 - [ ] Work in a **copy**; `save` is the only thing that writes disk.
 - [ ] OSC API needs `/connect "1391"` + the macOS-15 Local-Network toggle; else use AppleScript.
+- [ ] `-2710 "Could not make cue"` after it worked before = workspace is in **Show mode** (need Edit).
+- [ ] Don't name an AppleScript variable `times`; the parser chokes on it.
+- [ ] Timeline triggers: `slice markers`→`time`, set `pre wait`, nest with `move … to end of grp`.
 
-See also: `QLAB-CUES.md` (copy-paste cue reference), `generate.applescript` (the working generator),
+See also: `QLAB-CUES.md` (copy-paste cue reference), `QLAB-EOS.md` (Eos triggering from a song),
+`generate.applescript` / `generate_eos_triggers.applescript` (the generators),
 `../docs/tf-bridge-guide.html` (the operator manual + OSC dictionary).
