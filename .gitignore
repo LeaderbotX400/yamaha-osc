@@ -12,3 +12,14 @@ bridge/qlab/templates/
 
 # Claude Code session checkpoint
 .claude/RESUME.md
+
+# Devenv
+.devenv*
+devenv.local.nix
+devenv.local.yaml
+
+# direnv
+.direnv
+
+# pre-commit
+.pre-commit-config.yaml
