@@ -43,3 +43,37 @@ idle→active cycle holds the link (expected fine — blocking Python is proven 
 - Killed the :9000 test instance; removed `~/yamaha-osc-bridge/tf-bridge-test.py`.
 - Console spare channels (ch5 etc.) restored. Console left in scene A10 (SONATA_SCHOOL, non-YMCA).
 - Remaining (cosmetic, low priority): sanity-check ch2 label/colour from earlier Rust-era tests.
+
+## KNOWN ISSUE / POTENTIAL PROBLEM (installed 2026-11-16 21:15 with this open)
+The new bridge went live on the booth Mac with **scene re-assert after a recall NOT verified on the real console**
+(a recall overwrites the whole console, so it was never tested live; it is covered offline only).
+Two ways it could bite, so watch for them the first time a scene is recalled during a show:
+1. **A mic you cut could come back** (or stay in the scene's state) if the re-assert doesn't land after the recall.
+2. **Behaviour change:** on/off from `/ch|mix|mtrx|dca/.../on|mute|only` is now *remembered* (like `/tf/mute`). A scene
+   recall re-applies the **latest remembered on/off for every channel touched since the bridge started** over the
+   scene's own values. If the show relies on console scenes to set mics, those remembered states win. Restarting the
+   bridge (or `launchctl` reload) clears the memory.
+**To verify:** mute `/ch/36/on 0`, recall a scene (e.g. the current one), confirm ch36 is still off, then restore.
+**To back out:** `cp ~/Scripts/tf3.py.prev ~/Scripts/tf3.py` then reload `tf3.server` (see DEPLOY.md).
+
+## Live verification — batching / fade engine / mic scenes (2026-11-16, TF3 + booth Mac, test instance :9000)
+Run on spare channels (28-32, 35-40; all restored to baseline afterwards). The booth bridge on :8000 was
+**not** replaced; `install.sh` has not been run.
+
+- [x] **Batching accepted** — 24-ch writes as 3x8-line TCP writes all applied, no errors. Console takes
+      >1000 cmd/s (chunk 8 / 5 ms), so `TF_BATCH_MAX=8`, `TF_PACING_MS=5` are safe defaults.
+- [x] **24-channel fade** — 3.03 s for a 3 s fade (86 ticks), lands on target. (Measure with the bridge's
+      own log: the console floods every client with NOTIFYs, which makes external polling look slow.)
+- [x] **`/panic`** and **`/ch/x/fade/stop`** — fade stops in place and stays.
+- [x] **`only`**, **`|` groups**, **legacy `/tf/mute`** — read back correct on the console.
+- [x] **Snapshot save/recall** — levels restored after a 600 ms crossfade (an earlier odd reading was a stale readback).
+- [x] **`fader/rel`**, **preset** end to end. **Reply format** — `OK get ... <int>`; errors are `ERROR set InvalidArgument`.
+- [x] `fader/raw` now clamps to the +10 dB ceiling (the console clamped it anyway; the bridge now matches).
+- [ ] **Scene re-mute after a scene recall** — NOT run (a recall overwrites the whole console). Offline-tested only
+      (one-burst re-assert). Verify when the console can be disturbed: mute via `/ch/36/on 0`, recall a scene, check it stays muted.
+- [ ] **`CONSOLE ERROR` log line** — format confirmed with `nc`; not yet seen in the bridge log (the grammar can't easily send a bad command).
+
+### Finding about the cue list (not a bridge bug)
+`/ch/19-21/on on`-style messages write only the named channels (verified on the live :8000 bridge with ch36-39).
+Channel 1 going off comes from cues like `/ch/1-24/on off` ("MUTE") and `/ch/1-24/mute 1` ("TOP OF SHOW") in the
+show's cue list. Use `/ch/1-24/only <list>` when "only these mics" is what's meant.

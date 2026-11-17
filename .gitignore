@@ -3,9 +3,13 @@ __pycache__/
 *.py[cod]
 
 # QLab workspaces are binary and hold the theatre's proprietary show content. They live on the
-# booth Mac (and are reproduced by bridge/qlab/generate.applescript), so they are not tracked here.
-bridge/qlab/templates/
+# booth Mac (and are reproduced by src/qlab/generate.applescript), so they are not tracked here.
+src/qlab/templates/
 *.qlab5
+
+# Show-specific bridge data (created on the booth Mac; presets.example.json is the template)
+src/presets.json
+src/snapshots.json
 
 # Editor / OS
 .DS_Store

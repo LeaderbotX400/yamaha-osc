@@ -1,0 +1,5 @@
+{
+  "act1-sc1": ["/ch/1-24/only 1,2,3", "/dca/1/fade 0 1500 cosine"],
+  "act1-sc2": ["/ch/1-24/only 3,7,12", "/ch/5/name \"Lead Vox\""],
+  "all-mics-off": ["/ch/1-24/only"]
+}

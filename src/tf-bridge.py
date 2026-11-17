@@ -13,11 +13,14 @@ console's long-lived link, while blocking sockets (this script, nc) are rock-sol
 bounded by the console's ~5 ms command pacing, not by Python.
 """
 
+import json
 import math
 import os
 import re
+import shlex
 import socket
 import subprocess
+import sys
 import threading
 import time
 
@@ -30,20 +33,29 @@ TF_PORT = int(os.environ.get("TF_PORT", "49280"))
 OSC_IP = os.environ.get("TF_OSC_IP", "0.0.0.0")
 OSC_PORT = int(os.environ.get("TF_OSC_PORT", "8000"))
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+PRESETS_PATH = os.environ.get("TF_PRESETS", os.path.join(HERE, "presets.json"))
+SNAPSHOTS_PATH = os.environ.get("TF_SNAPSHOTS", os.path.join(HERE, "snapshots.json"))
+# Test-only escape hatches (never set on the booth Mac).
+SKIP_NET_GUARD = os.environ.get("TF_SKIP_NET_GUARD") == "1"   # allow a non-192.168.50.* host
+READER_ENABLED = os.environ.get("TF_READER", "1") != "0"      # kill-switch for the reply reader
+
 MAX_INPUT_CH, MAX_MIX, MAX_MATRIX, MAX_DCA = 40, 20, 4, 8
 
 RECONNECT_DELAY = 2.0
 CONNECT_TIMEOUT = 2.0
 CONNECTION_CHECK_INTERVAL = 1.0
 SCENE_RECALL_DELAY = 0.3
-STATE_COMMAND_DELAY = 0.01
 
 # ---- level / fade constants ------------------------------------------------------------------
 NEG_INF = -32768          # the console's -inf fader sentinel
 FADER_MAX = 1000          # +10.00 dB, the fader ceiling
 MIN_DB_RAW = -13800       # lowest real dB point; the floor a fade ramps to before -inf
 FADE_TICK = 0.033         # 30 Hz fade stepping
-MIN_SEND_INTERVAL = 0.005 # 5 ms pacing floor between console writes
+# Console writes are paced: commands go out in chunks of BATCH_MAX lines per TCP write, with at
+# least MIN_SEND_INTERVAL between chunks. Both are tunable without a code change.
+MIN_SEND_INTERVAL = float(os.environ.get("TF_PACING_MS", "5")) / 1000.0
+BATCH_MAX = max(1, int(os.environ.get("TF_BATCH_MAX", "8")))
 
 # Strip word (OSC) -> RCP node name, and a generous instance ceiling (the console rejects the rest).
 STRIP_PATHS = {
@@ -76,16 +88,29 @@ desired_scene = None
 scene_generation = 0
 applied_scene_generation = 0
 
-# ---- new: write serialisation + pacing, fade tracking, fader shadow --------------------------
+# ---- write serialisation + pacing, fade tracking, fader shadow --------------------------------
 write_lock = threading.Lock()
 _last_send = [0.0]
 fade_lock = threading.Lock()
-fade_threads = {}     # target key -> stop Event
-fader_shadow = {}     # target key -> last raw value we set (fade start when no explicit from)
+active_fades = {}     # target key -> Fade, advanced together by one engine thread
+fade_wake = threading.Event()
+fader_shadow = {}     # target key -> last known raw level (fade start when no explicit from)
+sync_wake = threading.Event()   # a desired mute/scene changed: apply it now, not on the next tick
+
+pending_gets = {}     # (path, idx, sub) -> [[Event, value], ...] awaiting an `OK get` reply
+pending_lock = threading.Lock()
+
+presets, presets_mtime = {}, None
+snapshots = {}
+snap_lock = threading.Lock()
+
+_tls = threading.local()   # per-thread "collect" context: a preset's writes go out as one batch
 
 
 def log(msg):
-    print(msg, flush=True)
+    # One write per line: threads log concurrently and print() would split text from newline.
+    sys.stdout.write(f"{msg}\n")
+    sys.stdout.flush()
 
 
 def set_connection_state(state):
@@ -123,6 +148,8 @@ def get_local_ipv4_addresses():
 
 
 def is_tf_network():
+    if SKIP_NET_GUARD:
+        return True
     return any(ip.startswith("192.168.50.") for _, ip in get_local_ipv4_addresses())
 
 
@@ -189,6 +216,9 @@ def connect():
         connection_event.set()
         set_connection_state("CONNECTED")
         log(f"TF CONNECTED (generation {generation})")
+        if READER_ENABLED:
+            threading.Thread(target=_reader, args=(s,), name=f"tf-reader-{generation}",
+                             daemon=True).start()
         return True
 
     except Exception as e:
@@ -204,30 +234,151 @@ def connect():
         return False
 
 
-def _raw_send(cmd):
-    """Write one command. Caller MUST hold write_lock. Paced to the console's command budget."""
+def _raw_send_many(cmds):
+    """Write commands, BATCH_MAX lines per TCP write, paced to the console's command budget.
+    Caller MUST hold write_lock."""
     s = get_socket()
     if s is None:
         return False
-    wait = MIN_SEND_INTERVAL - (time.monotonic() - _last_send[0])
-    if wait > 0:
-        time.sleep(wait)
-    try:
-        log(f"SEND: {cmd}")
-        s.sendall((cmd + "\r\n").encode("utf-8"))
-        _last_send[0] = time.monotonic()
+    for start in range(0, len(cmds), BATCH_MAX):
+        chunk = cmds[start:start + BATCH_MAX]
+        wait = MIN_SEND_INTERVAL - (time.monotonic() - _last_send[0])
+        if wait > 0:
+            time.sleep(wait)
+        try:
+            log(f"SEND x{len(chunk)}: {chunk[0]}" + (f" ... {chunk[-1]}" if len(chunk) > 1 else ""))
+            s.sendall("".join(c + "\r\n" for c in chunk).encode("utf-8"))
+            _last_send[0] = time.monotonic()
+        except Exception as e:
+            log(f"Send failed: {type(e).__name__}: {e}")
+            disconnect()
+            return False
+    return True
+
+
+def _raw_send(cmd):
+    return _raw_send_many([cmd])
+
+
+def send_many(cmds):
+    """Write RCP commands now. Serialised across threads and paced, so concurrent fades and direct
+    writes cannot interleave or outrun the console."""
+    cmds = list(cmds)
+    if not cmds:
         return True
-    except Exception as e:
-        log(f"Send failed: {type(e).__name__}: {e}")
-        disconnect()
-        return False
+    with write_lock:
+        return _raw_send_many(cmds)
 
 
 def send(cmd):
-    """Write one RCP command. Serialised across threads and paced, so concurrent fades and direct
-    writes cannot interleave or outrun the console."""
-    with write_lock:
-        return _raw_send(cmd)
+    return send_many([cmd])
+
+
+def begin_collect():
+    _tls.collect = {"cmds": [], "after": []}
+
+
+def end_collect():
+    """Flush what this thread collected as one batch, then run the deferred actions (fade starts)."""
+    c = getattr(_tls, "collect", None)
+    _tls.collect = None
+    if c is None:
+        return
+    send_many(c["cmds"])
+    for fn in c["after"]:
+        fn()
+
+
+def emit(cmds):
+    """Handlers write through here: queued while a preset is collecting, otherwise sent now."""
+    c = getattr(_tls, "collect", None)
+    if c is not None:
+        c["cmds"].extend(cmds)
+        return True
+    return send_many(cmds)
+
+
+# ---- console replies -------------------------------------------------------------------------
+
+def _handle_console_line(line):
+    parts = line.split()
+    if not parts:
+        return
+    if parts[0] == "ERROR":
+        log(f"CONSOLE ERROR: {line}")
+        return
+    if parts[0] not in ("OK", "NOTIFY") or len(parts) < 6 or parts[1] not in ("get", "set"):
+        return
+    try:
+        key = (parts[2], int(parts[3]), int(parts[4]))
+        value = int(parts[5])
+    except ValueError:
+        return
+    if parts[1] == "get":
+        with pending_lock:
+            waiters = pending_gets.pop(key, [])
+        for w in waiters:
+            w[1] = value
+            w[0].set()
+    # Track the console's own levels (desk moves) -- but not while one of our fades owns the target.
+    if parts[2].endswith("/Level") and (parts[1] == "get" or parts[0] == "NOTIFY"):
+        with fade_lock:
+            owned = key in active_fades
+        if not owned:
+            fader_shadow[key] = value
+
+
+def _reader(s):
+    """Drain the console's replies for one connection: log rejected commands, learn real levels."""
+    buf = b""
+    while not shutdown_event.is_set() and get_socket() is s:
+        try:
+            data = s.recv(4096)
+        except socket.timeout:
+            continue
+        except Exception:
+            break
+        if not data:
+            break
+        buf += data
+        while b"\n" in buf:
+            line, buf = buf.split(b"\n", 1)
+            _handle_console_line(line.decode("utf-8", "replace").strip())
+    if get_socket() is s and not shutdown_event.is_set():
+        log("Console link closed")
+        disconnect()
+
+
+def get_many(targets, timeout=1.0):
+    """Read many (path, idx, sub) levels with one batched write; {target: int | None}.
+    Anything the reader doesn't answer in time falls back to a short-lived read (few targets only)."""
+    targets = list(dict.fromkeys(targets))
+    out = {t: None for t in targets}
+    if READER_ENABLED and targets and get_socket() is not None:
+        waiters = {}
+        with pending_lock:
+            for t in targets:
+                w = [threading.Event(), None]
+                pending_gets.setdefault(t, []).append(w)
+                waiters[t] = w
+        send_many([f"get {p} {i} {s}" for p, i, s in targets])
+        deadline = time.monotonic() + timeout
+        for t, w in waiters.items():
+            w[0].wait(max(0.0, deadline - time.monotonic()))
+            out[t] = w[1]
+        with pending_lock:
+            for t, w in waiters.items():
+                lst = pending_gets.get(t)
+                if lst is not None:
+                    if w in lst:
+                        lst.remove(w)
+                    if not lst:
+                        pending_gets.pop(t, None)
+    missing = [t for t in targets if out[t] is None]
+    if 0 < len(missing) <= 8:
+        for t in missing:
+            out[t] = read_level_short(*t)
+    return out
 
 
 def tf_in_mute(ch, state):
@@ -500,63 +651,30 @@ def commands_for_state(key, state):
     }.get(object_type, [])
 
 
-def apply_state_key(key):
-    with state_lock:
-        if key not in desired_mute_state:
-            return True
-        desired = desired_mute_state[key]
-        applied = applied_mute_state.get(key)
-
-    if applied == desired:
-        return True
-
-    for cmd in commands_for_state(key, desired):
-        if not send(cmd):
-            return False
-        shutdown_event.wait(STATE_COMMAND_DELAY)
-
-    with state_lock:
-        if desired_mute_state.get(key) == desired:
-            applied_mute_state[key] = desired
-
-    return True
-
-
 def synchronize_states():
+    """Apply every pending desired mute/on state as ONE burst (so a scene's re-asserted mutes land
+    together instead of trickling out one command at a time)."""
     while not shutdown_event.is_set():
         if get_socket() is None:
             return False
 
         with state_lock:
-            keys = list(desired_mute_state.keys())
+            pending = [(k, d) for k, d in desired_mute_state.items()
+                       if applied_mute_state.get(k) != d]
+        if not pending:
+            return True
 
-        changed = False
-
-        for key in keys:
-            if get_socket() is None:
-                return False
-
-            with state_lock:
-                desired = desired_mute_state.get(key)
-                applied = applied_mute_state.get(key)
-
-            if desired == applied:
-                continue
-
-            changed = True
-            log(f"SYNC: {key} {applied} -> {desired}")
-
-            if not apply_state_key(key):
-                return False
+        cmds = []
+        for key, desired in pending:
+            log(f"SYNC: {key} {applied_mute_state.get(key)} -> {desired}")
+            cmds.extend(commands_for_state(key, desired))
+        if not send_many(cmds):
+            return False
 
         with state_lock:
-            pending = any(
-                desired_mute_state.get(key) != applied_mute_state.get(key)
-                for key in desired_mute_state
-            )
-
-        if not pending or not changed:
-            return True
+            for key, desired in pending:
+                if desired_mute_state.get(key) == desired:
+                    applied_mute_state[key] = desired
 
     return False
 
@@ -628,6 +746,7 @@ def update_state(key, state):
 
     if old_state != state:
         log(f"DESIRED: {key} {old_state} -> {state}")
+        sync_wake.set()
 
 
 def update_input_states(state, tokens):
@@ -716,6 +835,7 @@ def set_desired_scene(bank, num):
         scene_generation += 1
         generation = scene_generation
     log(f"DESIRED SCENE: {bank}{num} (generation {generation})")
+    sync_wake.set()
 
 
 def on_scene(addr, *args):
@@ -823,61 +943,208 @@ def read_level_short(path, index, sub):
     return None
 
 
+# ---- fade engine -----------------------------------------------------------------------------
+# One daemon thread moves *every* active fade in lockstep and writes all of a tick's values as one
+# batch, so a 24-channel fade costs the same as a 1-channel one. Fade values are a function of
+# elapsed time (not a step counter), so load can never stretch a fade's duration.
+
+class Fade:
+    __slots__ = ("path", "idx", "sub", "from_raw", "to_raw", "t0", "dur", "curve", "last")
+
+    def __init__(self, path, idx, sub, from_raw, to_raw, dur_ms, curve, t0=None):
+        self.path, self.idx, self.sub = path, idx, sub
+        self.from_raw, self.to_raw = from_raw, to_raw
+        self.dur, self.curve = dur_ms, curve
+        self.t0 = time.monotonic() if t0 is None else t0
+        self.last = None
+
+
+def fade_value(f, now):
+    """(value, finished) for fade `f` at monotonic time `now`. Always ends exactly on to_raw; a ramp
+    to/from -inf runs on the real dB scale (MIN_DB_RAW) and snaps to the sentinel at the end."""
+    elapsed_ms = (now - f.t0) * 1000.0
+    if f.dur <= FADE_TICK * 1000 or f.from_raw == f.to_raw or elapsed_ms >= f.dur:
+        return f.to_raw, True
+    ramp_from = MIN_DB_RAW if f.from_raw == NEG_INF else f.from_raw
+    ramp_to = MIN_DB_RAW if f.to_raw == NEG_INF else f.to_raw
+    t = curve_shape(f.curve, elapsed_ms / f.dur)
+    return ramp_from + int(round((ramp_to - ramp_from) * t)), False
+
+
+def fade_tick(now=None):
+    """Advance every active fade one step and write the changed values as one batch.
+
+    Takes write_lock *before* snapshotting active_fades. Anything that supersedes a fade pops it
+    from active_fades (under fade_lock only) *before* it takes write_lock, so a cancelled fade can
+    never write after the write that cancelled it. Lock order is always write_lock -> fade_lock."""
+    with write_lock:
+        now = time.monotonic() if now is None else now
+        with fade_lock:
+            items = list(active_fades.items())
+        if not items:
+            return False
+
+        cmds, shadow, done = [], [], []
+        for key, f in items:
+            value, finished = fade_value(f, now)
+            if value != f.last:
+                cmds.append(f"set {f.path} {f.idx} {f.sub} {value}")
+                shadow.append((key, value))
+                f.last = value
+            if finished:
+                done.append((key, f))
+
+        ok = _raw_send_many(cmds) if cmds else True
+
+        with fade_lock:
+            if not ok:
+                active_fades.clear()        # link dropped: abandon the fades, like a cancel
+            else:
+                for key, f in done:
+                    if active_fades.get(key) is f:
+                        del active_fades[key]
+
+    for key, value in shadow:
+        fader_shadow[key] = value
+    return True
+
+
+def _fade_engine():
+    while not shutdown_event.is_set():
+        with fade_lock:
+            busy = bool(active_fades)
+        if not busy:
+            fade_wake.wait(0.5)
+            fade_wake.clear()
+            continue
+        started = time.monotonic()
+        fade_tick()
+        shutdown_event.wait(max(0.0, FADE_TICK - (time.monotonic() - started)))
+
+
 def cancel_fade(key):
     with fade_lock:
-        stop = fade_threads.pop(key, None)
-    if stop is not None:
-        stop.set()
+        active_fades.pop(key, None)
 
 
-def _run_fade(key, path, index, sub, from_raw, to_raw, duration_ms, curve, stop):
-    if from_raw is None:
-        from_raw = fader_shadow.get(key)
-    if from_raw is None:
-        from_raw = read_level_short(path, index, sub)
-    if from_raw is None:
-        from_raw = to_raw  # last resort: a jump rather than a wrong-direction sweep
+def cancel_fades(keys):
+    with fade_lock:
+        for key in keys:
+            active_fades.pop(key, None)
 
-    values = plan(from_raw, to_raw, duration_ms, curve)
-    for i, raw in enumerate(values):
-        if i > 0:
-            time.sleep(FADE_TICK)
-        # Check the cancel flag while holding the write lock: because a superseding direct write
-        # sets stop *before* it takes the lock, this guarantees the fade can never write after it.
-        with write_lock:
-            if stop.is_set() or shutdown_event.is_set():
-                return
-            if not _raw_send(f"set {path} {index} {sub} {raw}"):
-                return
-        fader_shadow[key] = raw
+
+def cancel_fades_where(pred):
+    with fade_lock:
+        doomed = [k for k in active_fades if pred(k)]
+        for k in doomed:
+            del active_fades[k]
+    return len(doomed)
+
+
+def cancel_all_fades():
+    with fade_lock:
+        n = len(active_fades)
+        active_fades.clear()
+    return n
+
+
+def start_fades(specs):
+    """specs: (key, path, idx, sub, to_raw, duration_ms, curve, from_raw|None). Deferred until the
+    enclosing preset's batch has been flushed, if there is one."""
+    c = getattr(_tls, "collect", None)
+    if c is not None:
+        c["after"].append(lambda: start_fades_now(specs))
+    else:
+        start_fades_now(specs)
+
+
+def start_fades_now(specs):
+    # Unknown start levels: our own last write, else one batched read of the console.
+    need = [s[0] for s in specs
+            if s[7] is None and s[5] > 0 and fader_shadow.get(s[0]) is None]
+    levels = get_many(need) if need else {}
+
+    fades = []
+    for key, path, idx, sub, to_raw, ms, curve, from_raw in specs:
+        if from_raw is None:
+            from_raw = fader_shadow.get(key)
+        if from_raw is None:
+            from_raw = levels.get(key)
+        if from_raw is None:
+            from_raw = to_raw        # last resort: a jump rather than a wrong-direction sweep
+        fades.append((key, Fade(path, idx, sub, from_raw, to_raw, ms, curve)))
 
     with fade_lock:
-        if fade_threads.get(key) is stop:
-            fade_threads.pop(key, None)
+        for key, f in fades:
+            active_fades[key] = f    # replaces (= cancels) any fade already on this target
+    fade_wake.set()
 
 
-def start_fade(key, path, index, sub, to_raw, duration_ms, curve, from_raw=None):
-    cancel_fade(key)
-    stop = threading.Event()
-    with fade_lock:
-        fade_threads[key] = stop
-    threading.Thread(
-        target=_run_fade,
-        args=(key, path, index, sub, from_raw, to_raw, duration_ms, curve, stop),
-        name=f"fade-{key}",
-        daemon=True,
-    ).start()
+def set_levels_direct(items):
+    """items: (path, idx, sub, raw). A direct write cancels any fade on the same target (last
+    writer wins): the fades are popped *before* we take write_lock, see fade_tick."""
+    if not items:
+        return
+    cancel_fades([(p, i, s) for p, i, s, _ in items])
+    emit([f"set {p} {i} {s} {raw}" for p, i, s, raw in items])
+    for p, i, s, raw in items:
+        fader_shadow[(p, i, s)] = raw
 
 
 def set_level_direct(path, index, sub, raw):
-    """A direct level write cancels any fade on the same target (last writer wins). cancel_fade sets
-    the fade's stop flag before we take write_lock, so the cancelled fade cannot write after us."""
-    key = (path, index, sub)
-    cancel_fade(key)
-    with write_lock:
-        _raw_send(f"set {path} {index} {sub} {raw}")
-    fader_shadow[key] = raw
+    set_levels_direct([(path, index, sub, raw)])
 
+
+def rel_trim(cur_raw, delta_db):
+    """Raw level after nudging by delta_db. -inf only leaves -inf for a positive nudge."""
+    if cur_raw == NEG_INF:
+        if delta_db <= 0:
+            return NEG_INF
+        cur_raw = MIN_DB_RAW
+    new = cur_raw + int(round(delta_db * 100))
+    if new > FADER_MAX:
+        return FADER_MAX
+    if new < MIN_DB_RAW:
+        return NEG_INF
+    return new
+
+
+def current_levels(targets):
+    """Best-known raw level per (path, idx, sub): our shadow, else one batched console read."""
+    out, missing = {}, []
+    for t in targets:
+        v = fader_shadow.get(t)
+        if v is None:
+            missing.append(t)
+        else:
+            out[t] = v
+    if missing:
+        for t, v in get_many(missing).items():
+            if v is not None:
+                out[t] = v
+                fader_shadow[t] = v
+    return out
+
+
+# ---- on/off state ----------------------------------------------------------------------------
+# on/off for input/mix/matrix/DCA strips goes through the same desired-state map as /tf/mute, so a
+# scene recall re-asserts it. Other strips (stin, fxrtn, st, mono) are written directly.
+STATE_KEY_NODE = {"InCh": "input", "Mix": "aux", "Mtrx": "matrix", "DCA": "dca"}
+
+
+def set_on_pairs(node, pairs):
+    """pairs: (0-based index, 0|1). Stateful strips are applied by the sync thread as one burst."""
+    if not pairs:
+        return
+    kind = STATE_KEY_NODE.get(node)
+    if kind:
+        for idx, on in pairs:
+            update_state((kind, idx + 1), on)
+    else:
+        emit([f"set MIXER:Current/{node}/Fader/On {idx} 0 {on}" for idx, on in pairs])
+
+
+# ---- selectors, values -----------------------------------------------------------------------
 
 def selector_to_indices(strip_node, selector):
     """Resolve a 1-based OSC selector (number, range, list) to 0-based console indices."""
@@ -885,16 +1152,68 @@ def selector_to_indices(strip_node, selector):
     return [n - 1 for n in ones]
 
 
-def _first_arg(args):
-    return args[0] if args else None
+def split_groups(node, selector):
+    """'1-5|12-24' -> one index list per '|' group (kept positional, even when empty)."""
+    return [selector_to_indices(node, g) for g in selector.split("|")]
+
+
+def flat_values(args):
+    """Split string args on spaces/commas so 'off on' and ('off', 'on') mean the same."""
+    out = []
+    for a in args:
+        if isinstance(a, str):
+            out.extend(a.replace(",", " ").split())
+        else:
+            out.append(a)
+    return out
+
+
+def norm_tokens(args):
+    out = []
+    for a in args:
+        if isinstance(a, float) and a.is_integer():
+            a = int(a)
+        out.extend(t for t in str(a).replace(",", " ").split() if t)
+    return out
+
+
+def values_per_group(vals, n, addr=""):
+    """Pair values to '|' groups by position; one value applies to every group."""
+    if not vals:
+        return [None] * n
+    if len(vals) == 1:
+        return list(vals) * n
+    if len(vals) > n:
+        log(f"{addr}: {len(vals)} values for {n} group(s); extras ignored: {vals[n:]}")
+    return [vals[i] if i < len(vals) else None for i in range(n)]
+
+
+def _truthy(arg):
+    if isinstance(arg, str):
+        s = arg.strip().lower()
+        if s in ("on", "true", "yes", "t", "y"):
+            return True
+        try:
+            return float(s) != 0
+        except ValueError:
+            return False
+    return bool(arg)
+
+
+def _level_path(node):
+    return f"MIXER:Current/{node}/Fader/Level"
 
 
 def on_osc(addr, *args):
-    """Default handler: parse the /<strip>/<sel>/<param> grammar (and /scene, /mutegroup)."""
-    address = addr.rstrip("/")
-    seg = address.strip("/").split("/")
+    """Default handler: the /<strip>/<sel>/<param> grammar plus /scene, /mutegroup, /preset,
+    /snapshot and /panic. A message's console writes go out as one batch."""
+    seg = addr.rstrip("/").strip("/").split("/")
 
     try:
+        if seg == ["panic"] or seg == ["fade", "stop"]:
+            log(f"FADES STOPPED: {cancel_all_fades()}")
+            return
+
         # /scene/recall <a|b> <n>   (stateful, like /tf/scene)
         if seg[:2] == ["scene", "recall"]:
             if len(args) >= 2:
@@ -904,11 +1223,24 @@ def on_osc(addr, *args):
                     set_desired_scene(bank, num)
             return
 
-        # /mutegroup/<sel> <0|1>   (direct)
+        # /mutegroup/<sel> <0|1>   (direct; '|' groups take one value each)
         if len(seg) == 2 and seg[0] == "mutegroup":
-            on = 1 if _truthy(_first_arg(args)) else 0
-            for g in parse_range_list(seg[1], 1, 6):
-                send(f"set MIXER:Current/MuteMaster/On {g - 1} 0 {on}")
+            groups = [parse_range_list(g, 1, 6) for g in seg[1].split("|")]
+            vals = values_per_group(flat_values(args), len(groups), addr)
+            cmds = []
+            for g, v in zip(groups, vals):
+                if v is not None:
+                    on = 1 if _truthy(v) else 0
+                    cmds += [f"set MIXER:Current/MuteMaster/On {n - 1} 0 {on}" for n in g]
+            emit(cmds)
+            return
+
+        if len(seg) == 2 and seg[0] == "preset":
+            run_preset(seg[1])
+            return
+
+        if len(seg) == 2 and seg[0] == "snapshot":
+            snapshot_command(seg[1], args)
             return
 
         if len(seg) < 3:
@@ -920,63 +1252,122 @@ def on_osc(addr, *args):
         if node is None:
             log(f"UNMATCHED OSC (strip): {addr}")
             return
-        indices = selector_to_indices(node, selector)
-        if not indices:
+        groups = split_groups(node, selector)
+        flat_idx = list(dict.fromkeys(i for g in groups for i in g))
+        if not flat_idx:
             log(f"UNMATCHED OSC (selector): {addr}")
             return
 
         param = rest[0]
+        path = _level_path(node)
 
-        if param == "fader" and rest[1:] == ["raw"]:
-            raw = int(float(_first_arg(args)))
-            for i in indices:
-                set_level_direct(f"MIXER:Current/{node}/Fader/Level", i, 0, raw)
+        if param == "fader" and rest == ["fader"]:
+            vals = values_per_group(flat_values(args), len(groups), addr)
+            items = []
+            for g, v in zip(groups, vals):
+                if v is None:
+                    continue
+                db = parse_db_arg(v)
+                if db is None:
+                    log(f"BAD fader arg: {addr} {args}")
+                    return
+                items += [(path, i, 0, db_to_raw(db)) for i in g]
+            set_levels_direct(items)
 
-        elif param == "fader":
-            db = parse_db_arg(_first_arg(args))
-            if db is None:
-                log(f"BAD fader arg: {addr} {args}")
-                return
-            raw = db_to_raw(db)
-            for i in indices:
-                set_level_direct(f"MIXER:Current/{node}/Fader/Level", i, 0, raw)
+        elif param == "fader" and rest == ["fader", "raw"]:
+            vals = values_per_group(flat_values(args), len(groups), addr)
+            items = []
+            for g, v in zip(groups, vals):
+                if v is not None:
+                    raw = max(NEG_INF, min(FADER_MAX, int(float(v))))   # same ceiling as dB writes
+                    items += [(path, i, 0, raw) for i in g]
+            set_levels_direct(items)
 
-        elif param == "fade":
+        elif param == "fader" and rest == ["fader", "rel"]:
+            vals = values_per_group(flat_values(args), len(groups), addr)
+            deltas = {}
+            for g, v in zip(groups, vals):
+                if v is None:
+                    continue
+                d = parse_db_arg(v)
+                if d is None or d in (float("inf"), float("-inf")):
+                    log(f"BAD fader/rel arg: {addr} {args}")
+                    return
+                for i in g:
+                    deltas[(path, i, 0)] = d
+            cur = current_levels(list(deltas))
+            items = [(p, i, s, rel_trim(cur[(p, i, s)], d))
+                     for (p, i, s), d in deltas.items() if (p, i, s) in cur]
+            if len(items) != len(deltas):
+                log(f"{addr}: no known level for {len(deltas) - len(items)} target(s); skipped")
+            set_levels_direct(items)
+
+        elif param == "fade" and rest == ["fade", "stop"]:
+            idxset, prefix = set(flat_idx), f"MIXER:Current/{node}/"
+            n = cancel_fades_where(lambda k: k[0].startswith(prefix) and k[1] in idxset)
+            log(f"FADES STOPPED: {n}")
+
+        elif param == "fade" and rest == ["fade"]:
             spec = parse_fade_args(args)
             if spec is None:
                 log(f"BAD fade args: {addr} {args}")
                 return
             to_raw, ms, curve, from_raw = spec
-            path = f"MIXER:Current/{node}/Fader/Level"
-            for i in indices:
-                start_fade((path, i, 0), path, i, 0, to_raw, ms, curve, from_raw)
+            start_fades([((path, i, 0), path, i, 0, to_raw, ms, curve, from_raw)
+                         for i in flat_idx])
 
-        elif param == "on":
-            on = 1 if _truthy(_first_arg(args)) else 0
-            for i in indices:
-                _set_on(node, i, 0, on)
+        elif param in ("on", "mute") and len(rest) == 1:
+            vals = values_per_group(flat_values(args), len(groups), addr)
+            pairs = []
+            for g, v in zip(groups, vals):
+                if v is None:
+                    continue
+                on = 1 if _truthy(v) else 0
+                if param == "mute":
+                    on = 1 - on          # mute 1 == on 0
+                pairs += [(i, on) for i in g]
+            set_on_pairs(node, pairs)
 
-        elif param == "mute":
-            # mute 1 == on 0
-            on = 0 if _truthy(_first_arg(args)) else 1
-            for i in indices:
-                _set_on(node, i, 0, on)
-
-        elif param == "name":
-            text = str(_first_arg(args) or "")
-            for i in indices:
-                send(f'set MIXER:Current/{node}/Label/Name {i} 0 "{text}"')
-
-        elif param in ("color", "colour"):
-            col = str(_first_arg(args) or "").strip()
-            if col.lower() not in LABEL_COLORS:
-                log(f"BAD colour: {col}")
+        elif param == "only" and len(rest) == 1:
+            # Everything in the scope goes off except the listed numbers, which go on.
+            if len(groups) != 1:
+                log(f"{addr}: 'only' takes a single selector, not '|' groups")
                 return
-            for i in indices:
-                send(f'set MIXER:Current/{node}/Label/Color {i} 0 "{col}"')
+            keep = parse_range_list(join_tokens(norm_tokens(args)), 1, STRIP_MAX.get(node, 96))
+            scope = groups[0]
+            scope_ones = {i + 1 for i in scope}
+            stray = [n for n in keep if n not in scope_ones]
+            if stray:
+                log(f"{addr}: {stray} outside the selector; ignored")
+            keepset = set(keep) & scope_ones
+            set_on_pairs(node, [(i, 1 if i + 1 in keepset else 0) for i in scope])
+
+        elif param == "name" and len(rest) == 1:
+            if not args:
+                return
+            vals = values_per_group(list(args), len(groups), addr)
+            cmds = []
+            for g, v in zip(groups, vals):
+                if v is not None:
+                    text = str(v).replace('"', "'")
+                    cmds += [f'set MIXER:Current/{node}/Label/Name {i} 0 "{text}"' for i in g]
+            emit(cmds)
+
+        elif param in ("color", "colour") and len(rest) == 1:
+            vals = values_per_group(flat_values(args), len(groups), addr)
+            cmds = []
+            for g, v in zip(groups, vals):
+                if v is None:
+                    continue
+                col = str(v).strip()
+                if col.lower() not in LABEL_COLORS:
+                    log(f"BAD colour: {col}")
+                    return
+                cmds += [f'set MIXER:Current/{node}/Label/Color {i} 0 "{col}"' for i in g]
+            emit(cmds)
 
         elif param == "send" and len(rest) == 4:
-            _handle_send(node, indices, rest, args, addr)
+            _handle_send(node, groups, flat_idx, rest, args, addr)
 
         else:
             log(f"UNMATCHED OSC (param): {addr}")
@@ -985,28 +1376,13 @@ def on_osc(addr, *args):
         log(f"OSC handler error on {addr} {args}: {type(e).__name__}: {e}")
 
 
-def _truthy(arg):
-    if isinstance(arg, str):
-        return arg.strip().lower() in ("1", "on", "true", "yes")
-    return bool(arg)
-
-
-def _set_on(node, index, sub, on):
-    # DCA is mirrored to DcaCh; write both to match the console surface exactly.
-    if node == "DCA":
-        send(f"set MIXER:Current/DCA/Fader/On {index} {sub} {on}")
-        send(f"set MIXER:Current/DcaCh/Fader/On {index} {sub} {on}")
-    else:
-        send(f"set MIXER:Current/{node}/Fader/On {index} {sub} {on}")
-
-
 SEND_LEAF = {
     "InCh": "ToMix", "StInCh": "ToMix", "FxRtnCh": "ToMix",
     "Mix": "ToMtrx", "St": "ToMtrx", "Mono": "ToMtrx",
 }
 
 
-def _handle_send(node, indices, rest, args, addr):
+def _handle_send(node, groups, flat_idx, rest, args, addr):
     _, bus, dest_sel, leaf = rest
     leaf_node = SEND_LEAF.get(node)
     if leaf_node is None:
@@ -1018,29 +1394,37 @@ def _handle_send(node, indices, rest, args, addr):
         return
     dest_max = MAX_MIX if leaf_node == "ToMix" else MAX_MATRIX
     dests = [d - 1 for d in parse_range_list(dest_sel, 1, dest_max)]
+    lpath = f"MIXER:Current/{node}/{leaf_node}/Level"
 
     if leaf == "fader":
-        db = parse_db_arg(_first_arg(args))
-        if db is None:
-            return
-        raw = db_to_raw(db)
-        for i in indices:
-            for d in dests:
-                set_level_direct(f"MIXER:Current/{node}/{leaf_node}/Level", i, d, raw)
+        vals = values_per_group(flat_values(args), len(groups), addr)
+        items = []
+        for g, v in zip(groups, vals):
+            if v is None:
+                continue
+            db = parse_db_arg(v)
+            if db is None:
+                log(f"BAD send level: {addr} {args}")
+                return
+            items += [(lpath, i, d, db_to_raw(db)) for i in g for d in dests]
+        set_levels_direct(items)
     elif leaf == "on":
-        on = 1 if _truthy(_first_arg(args)) else 0
-        for i in indices:
-            for d in dests:
-                send(f"set MIXER:Current/{node}/{leaf_node}/On {i} {d} {on}")
+        vals = values_per_group(flat_values(args), len(groups), addr)
+        cmds = []
+        for g, v in zip(groups, vals):
+            if v is not None:
+                on = 1 if _truthy(v) else 0
+                cmds += [f"set MIXER:Current/{node}/{leaf_node}/On {i} {d} {on}"
+                         for i in g for d in dests]
+        emit(cmds)
     elif leaf == "fade":
         spec = parse_fade_args(args)
         if spec is None:
+            log(f"BAD fade args: {addr} {args}")
             return
         to_raw, ms, curve, from_raw = spec
-        for i in indices:
-            for d in dests:
-                path = f"MIXER:Current/{node}/{leaf_node}/Level"
-                start_fade((path, i, d), path, i, d, to_raw, ms, curve, from_raw)
+        start_fades([((lpath, i, d), lpath, i, d, to_raw, ms, curve, from_raw)
+                     for i in flat_idx for d in dests])
     else:
         log(f"UNMATCHED send leaf: {addr}")
 
@@ -1069,6 +1453,173 @@ def parse_fade_args(args):
             if fdb is not None:
                 from_raw = db_to_raw(fdb)
     return db_to_raw(to_db), ms, curve, from_raw
+
+
+# ---- presets: named lists of OSC lines, fired as one batch -------------------------------------
+# presets.json: {"act1-sc2": ["/ch/1-24/only 3,7,12", "/dca/1/fade 0 1500"], ...}
+
+_NUM_RE = re.compile(r"[+-]?\d+(\.\d+)?")
+
+
+def _coerce(tok):
+    if _NUM_RE.fullmatch(tok):
+        return float(tok) if "." in tok else int(tok)
+    return tok
+
+
+def parse_osc_line(line):
+    """'/ch/5/name "Lead Vox"' -> ('/ch/5/name', ['Lead Vox']); numeric tokens become numbers."""
+    parts = shlex.split(line)
+    if not parts or not parts[0].startswith("/"):
+        raise ValueError(f"not an OSC line: {line!r}")
+    return parts[0], [_coerce(p) for p in parts[1:]]
+
+
+def dispatch(addr, *args):
+    if addr == "/tf/mute":
+        on_mute(addr, *args)
+    elif addr == "/tf/unmute":
+        on_unmute(addr, *args)
+    elif addr == "/tf/scene":
+        on_scene(addr, *args)
+    else:
+        on_osc(addr, *args)
+
+
+def load_presets(force=False):
+    global presets, presets_mtime
+    try:
+        mtime = os.stat(PRESETS_PATH).st_mtime
+    except OSError:
+        return
+    if not force and mtime == presets_mtime:
+        return
+    presets_mtime = mtime
+    try:
+        with open(PRESETS_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict) or not all(
+                isinstance(v, list) and all(isinstance(x, str) for x in v) for v in data.values()):
+            raise ValueError("expected {name: [osc line, ...]}")
+        presets = data
+        log(f"PRESETS: loaded {len(presets)} from {PRESETS_PATH}")
+    except Exception as e:
+        log(f"PRESETS: {PRESETS_PATH} not loaded ({type(e).__name__}: {e}); keeping previous")
+
+
+def run_preset(name):
+    if name == "reload":
+        load_presets(force=True)
+        return
+    if getattr(_tls, "collect", None) is not None:
+        log(f"PRESET {name}: nested presets are not allowed")
+        return
+    load_presets()
+    lines = presets.get(name)
+    if lines is None:
+        log(f"PRESET {name}: not found")
+        return
+    log(f"PRESET {name}: {len(lines)} line(s)")
+    begin_collect()
+    try:
+        for line in lines:
+            try:
+                addr, args = parse_osc_line(line)
+            except ValueError as e:
+                log(f"PRESET {name}: {e}")
+                continue
+            if addr.startswith("/preset/"):
+                log(f"PRESET {name}: nested presets are not allowed")
+                continue
+            dispatch(addr, *args)
+    finally:
+        end_collect()
+
+
+# ---- snapshots: save levels + on-states, recall (optionally as a crossfade) -------------------
+
+def load_snapshots():
+    global snapshots
+    try:
+        with open(SNAPSHOTS_PATH, encoding="utf-8") as fh:
+            snapshots = json.load(fh)
+        log(f"SNAPSHOTS: loaded {len(snapshots)} from {SNAPSHOTS_PATH}")
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        log(f"SNAPSHOTS: {SNAPSHOTS_PATH} not loaded ({type(e).__name__}: {e})")
+
+
+def _store_snapshots():
+    tmp = SNAPSHOTS_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(snapshots, fh, indent=1)
+    os.replace(tmp, SNAPSHOTS_PATH)
+
+
+def snapshot_command(action, args):
+    if action == "save":
+        vals = flat_values(args)
+        if len(vals) < 2:
+            log("SNAPSHOT save: need <name> <strip/sel> ...")
+            return
+        name, targets = str(vals[0]), []
+        for tok in vals[1:]:
+            word, _, sel = str(tok).strip("/").partition("/")
+            node = STRIP_PATHS.get(word)
+            if node is None or not sel:
+                log(f"SNAPSHOT save: bad target {tok!r} (want e.g. ch/1-24)")
+                continue
+            for g in split_groups(node, sel):
+                targets += [(node, i) for i in g]
+        targets = list(dict.fromkeys(targets))
+        queries = []
+        for node, i in targets:
+            queries += [(_level_path(node), i, 0), (f"MIXER:Current/{node}/Fader/On", i, 0)]
+        got = get_many(queries)
+        items = [[node, i, got.get((_level_path(node), i, 0)),
+                  got.get((f"MIXER:Current/{node}/Fader/On", i, 0))] for node, i in targets]
+        with snap_lock:
+            snapshots[name] = {"items": items}
+            _store_snapshots()
+        log(f"SNAPSHOT saved {name!r}: {len(items)} strip(s)")
+
+    elif action == "recall":
+        if not args:
+            return
+        name = str(args[0])
+        with snap_lock:
+            snap = snapshots.get(name)
+        if snap is None:
+            log(f"SNAPSHOT {name!r}: not found")
+            return
+        ms, curve = 0, "linear"
+        for extra in args[1:]:
+            if isinstance(extra, str) and extra.strip().lower() in CURVE_NAMES:
+                curve = extra
+            else:
+                try:
+                    ms = int(float(extra))
+                except (TypeError, ValueError):
+                    pass
+        levels, fades, on_by_node = [], [], {}
+        for node, i, level, on in snap["items"]:
+            path = _level_path(node)
+            if level is not None:
+                if ms > 0:
+                    fades.append(((path, i, 0), path, i, 0, level, ms, curve, None))
+                else:
+                    levels.append((path, i, 0, level))
+            if on is not None:
+                on_by_node.setdefault(node, []).append((i, 1 if on else 0))
+        set_levels_direct(levels)
+        start_fades(fades)
+        for node, pairs in on_by_node.items():
+            set_on_pairs(node, pairs)
+        log(f"SNAPSHOT recalled {name!r} ({'fade ' + str(ms) + ' ms' if ms > 0 else 'jump'})")
+
+    else:
+        log(f"UNMATCHED snapshot action: {action}")
 
 
 def on_unknown(addr, *args):
@@ -1111,6 +1662,7 @@ def reconnect_loop():
                 disconnect()
                 continue
 
+        sync_wake.clear()
         if not synchronize_with_tf():
             if get_socket() is None:
                 continue
@@ -1118,7 +1670,7 @@ def reconnect_loop():
             disconnect()
             continue
 
-        shutdown_event.wait(CONNECTION_CHECK_INTERVAL)
+        sync_wake.wait(CONNECTION_CHECK_INTERVAL)
 
 
 class ReusableOSCUDPServer(osc_server.ThreadingOSCUDPServer):
@@ -1133,6 +1685,10 @@ def main():
         name="TF3-ConnectionManager",
         daemon=True
     ).start()
+
+    threading.Thread(target=_fade_engine, name="TF3-FadeEngine", daemon=True).start()
+    load_presets()
+    load_snapshots()
 
     disp = Dispatcher()
     disp.map("/tf/mute", on_mute)

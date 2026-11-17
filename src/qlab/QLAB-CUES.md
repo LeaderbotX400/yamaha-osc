@@ -117,6 +117,18 @@ reach −inf; use a bridge `/ch/1/fade … -inf` or a final `/ch/1/fader -inf` f
 | SCENE · recall A12 | 182 | `/scene/recall a 12` | Recall scene 12, bank A. **Mutes re‑assert on top.** |
 | SCENE · recall B03 | 183 | `/scene/recall b 3` | Recall scene 3, bank B |
 
+## Mic scenes, groups & presets
+
+| Suggested name | # | OSC message | Effect |
+|---|---|---|---|
+| MICS · only 3 7 12 | 190 | `/ch/1-24/only 3,7,12` | 3, 7, 12 on; every other input 1–24 off (stateful) |
+| MICS · 1-5 off, 12-24 on | 191 | `/ch/1-5\|12-24/on off on` | Different value per `\|` group, one batch |
+| MICS · trim ch5 | 192 | `/ch/5/fader/rel -3` | Nudge down 3 dB |
+| PANIC · stop fades | 193 | `/panic` | Stop every running fade in place |
+| PRESET · act1-sc2 | 194 | `/preset/act1-sc2` | Run a named preset from `presets.json` |
+| SNAPSHOT · save pit | 195 | `/snapshot/save pit ch/1-4 dca/1` | Store current levels + on/off |
+| SNAPSHOT · recall pit | 196 | `/snapshot/recall pit 2000 cosine` | Crossfade back over 2 s |
+
 `scene/recall` is **stateful**: after the scene loads, any mutes you set through the bridge are
 re‑applied on top of it (so a muted channel stays muted across a scene change).
 
