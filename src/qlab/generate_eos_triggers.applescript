@@ -1,3 +1,5 @@
+-- Copyright (c) 2026 Eric Singer. All rights reserved.
+-- Proprietary and confidential; restricted distribution. No use without an explicit written grant - see LICENSE.
 -- generate_eos_triggers.applescript
 --
 -- Reads the SLICE MARKERS of a song (audio cue) and creates one Eos-trigger Network cue per slice,

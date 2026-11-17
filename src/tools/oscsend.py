@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Eric Singer. All rights reserved.
+# Proprietary and confidential; restricted distribution. No use without an explicit written grant - see LICENSE.
 """Minimal stdlib OSC/UDP sender. Usage: oscsend.py host port /addr arg1 arg2 ...
 Arg typing: looks like int -> int32 'i'; has '.'/inf and numeric -> float32 'f'; else string 's'.
 Force string with a leading '=' (e.g. =Blue) or quotes handled by shell."""

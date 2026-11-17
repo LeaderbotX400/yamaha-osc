@@ -23,6 +23,10 @@ the bare `python3` in an ssh shell does not). Logs: `/tmp/tf3.out.log`, `/tmp/tf
 Deploy/rollback runbook: `src/docs/DEPLOY.md`.
 `presets.json` / `snapshots.json` live beside the deployed script (`~/Scripts/`); both are gitignored show data.
 
+## License
+All code is proprietary (c) 2026 Eric Singer, restricted distribution, explicit revocable grants only (see `LICENSE`).
+Keep the two-line copyright header on every new source file; `src/reference/` is third-party and excluded.
+
 ## Open issue
 The new bridge is **installed on the booth Mac (2026-11-16)** but scene re-assert after a recall is not yet verified on the
 real console, and new-grammar on/off is remembered across scenes. See `src/docs/PENDING-LIVE.md` → KNOWN ISSUE.

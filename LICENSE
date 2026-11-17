@@ -1,0 +1,83 @@
+TF BRIDGE — PROPRIETARY SOFTWARE LICENSE
+SPDX-License-Identifier: LicenseRef-Singer-Proprietary
+
+Copyright (c) 2026 Eric Singer. All rights reserved.
+
+1. OWNERSHIP
+   This software, including all source code, scripts, tools, documentation, cue references and
+   related materials in this repository (the "Software"), is the property of Eric Singer (the
+   "Owner"). The Software is proprietary, confidential, and of restricted distribution. It is
+   not open source and no part of it is released to the public.
+
+2. NO LICENSE BY DEFAULT
+   No right or license to use, copy, run, modify, deploy, distribute, publish, sublicense, or
+   otherwise exploit the Software is granted to anyone, whether by implication, estoppel, course
+   of dealing, possession of a copy, or otherwise, except as expressly stated in a Grant under
+   Section 3. Having access to the Software (for example, a copy on a computer, a repository, a
+   file share or a booth machine) is not a license.
+
+3. GRANTS
+   The Owner may, at the Owner's sole discretion, give a written, explicit grant of rights in the
+   Software (a "Grant"), including to a company or other organization for use in its own venue,
+   production or business (a "Corporate Grant"). A Grant:
+   (a) is effective only if it is in writing, names the grantee, and is signed or sent by the
+       Owner (an email from the Owner is sufficient);
+   (b) is limited to the purposes, sites, systems and term it states, and to nothing else;
+   (c) is non-exclusive, non-transferable, and non-sublicensable, and may not be assigned by
+       merger, sale or operation of law without the Owner's written consent;
+   (d) does not include the right to modify the Software or to distribute it to anyone outside
+       the grantee unless the Grant says so in express words; and
+   (e) does not transfer ownership of the Software or of any modification, derivative or
+       improvement of it, all of which the Owner owns unless the Owner agrees otherwise in
+       writing.
+
+4. REVOCATION
+   Every Grant is revocable by the Owner at any time, for any reason or no reason, at the Owner's
+   sole discretion, by notice to the grantee (an email is sufficient). Unless the notice states a
+   later date, revocation takes effect immediately. On revocation the grantee must stop using the
+   Software and delete all copies in its possession or control, including copies installed on
+   machines it operates, within the time the notice allows. Revocation does not entitle the
+   grantee to any refund, compensation or notice period. Deployed copies are licensed only for as
+   long as the Grant is in force.
+
+5. RESTRICTIONS
+   Except as a Grant expressly allows, you must not: (a) copy, share, publish, upload, mirror or
+   otherwise distribute the Software or any part of it; (b) install or run it on any system; (c)
+   modify it or create derivative works; (d) use it to build, train or improve another software
+   product or service, or to train a machine-learning model; (e) remove or alter any copyright or
+   license notice; or (f) represent the Software, or any work derived from it, as your own.
+
+6. THIRD-PARTY AND EXCLUDED MATERIAL
+   This license covers only material owned by the Owner. It does not cover, and the Owner does
+   not claim ownership of or license: (a) third-party software the Software depends on or invokes,
+   such as the python-osc library, Python itself, QLab and the Yamaha TF console firmware, each of
+   which is governed by its own terms; (b) code or files in this repository that are marked as, or
+   that come from, a third party, including the venue-supplied original script kept for reference
+   in `src/reference/`; and (c) any names, logos or trademarks of Yamaha, Figure 53, ETC, or others.
+   Nothing here grants any right in those materials.
+
+7. CONTRIBUTIONS
+   Anyone who submits a change, idea or other contribution to the Software does so on the basis
+   that the Owner may use it, modify it and license it in any way, with no obligation to the
+   contributor, unless the Owner and the contributor agree otherwise in writing.
+
+8. NO WARRANTY; LIVE-PRODUCTION NOTICE
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
+   WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, ACCURACY OR
+   UNINTERRUPTED OR ERROR-FREE OPERATION. The Software sends commands to live audio equipment.
+   The grantee is solely responsible for testing it with its own equipment and for having
+   a fallback (such as manual control of the console) during any live event.
+
+9. LIMITATION OF LIABILITY
+   TO THE FULLEST EXTENT PERMITTED BY LAW, THE OWNER IS NOT LIABLE FOR ANY CLAIM, LOSS OR DAMAGE
+   OF ANY KIND ARISING FROM OR RELATED TO THE SOFTWARE OR ITS USE OR INABILITY TO USE IT,
+   INCLUDING LOST PROFITS, CANCELLED OR DISRUPTED PERFORMANCES, EQUIPMENT DAMAGE, HEARING OR
+   PERSONAL INJURY, OR INDIRECT, INCIDENTAL, SPECIAL OR CONSEQUENTIAL DAMAGES, EVEN IF ADVISED OF
+   THEIR POSSIBILITY. IF LIABILITY CANNOT BE EXCLUDED, IT IS LIMITED TO THE AMOUNT THE GRANTEE
+   PAID THE OWNER FOR THE SOFTWARE IN THE PRECEDING TWELVE MONTHS (WHICH MAY BE ZERO).
+
+10. GENERAL
+    If any part of this license is unenforceable, the rest stays in effect. The Owner's failure
+    to enforce any right is not a waiver. This license, together with any Grant, is the whole
+    agreement about the Software. Only the Owner may change it, in writing. To request a Grant,
+    contact the Owner directly.

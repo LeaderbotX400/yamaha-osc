@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Eric Singer. All rights reserved.
+# Proprietary and confidential; restricted distribution. No use without an explicit written grant - see LICENSE.
 """OSC -> Yamaha TF console bridge.
 
 Evolved from tf3.py. The proven core is unchanged: one persistent blocking TCP socket to the

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Eric Singer. All rights reserved.
+# Proprietary and confidential; restricted distribution. No use without an explicit written grant - see LICENSE.
 """Offline unit tests for tf-bridge.py's pure logic (no console, no pythonosc needed).
 
 Run anywhere:  python3 selftest.py

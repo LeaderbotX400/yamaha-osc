@@ -1,3 +1,5 @@
+-- Copyright (c) 2026 Eric Singer. All rights reserved.
+-- Proprietary and confidential; restricted distribution. No use without an explicit written grant - see LICENSE.
 -- generate.applescript — build the "TF BRIDGE TEMPLATES" cue group in the front QLab workspace.
 --
 -- Creates one Network (OSC) cue per bridge function, named/numbered, addressed with the new

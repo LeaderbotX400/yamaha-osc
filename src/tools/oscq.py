@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Eric Singer. All rights reserved.
+# Proprietary and confidential; restricted distribution. No use without an explicit written grant - see LICENSE.
 """OSC query: send a message and print any reply (QLab replies to the sending UDP port).
 Usage: oscq.py host port /addr [args...]   (waits up to 2s for a reply)"""
 import socket, struct, sys, time
