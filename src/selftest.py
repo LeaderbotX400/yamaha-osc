@@ -294,6 +294,97 @@ def t_replies(fake):
     check("shadow not clobbered while our fade owns it", tb.fader_shadow.get(key), -700)
 with_fake(t_replies)
 
+print("virtual DCAs:")
+def vd_reset():
+    tb.vdca_members.clear(); tb.vdca_offset.clear(); tb.vdca_base.clear()
+def lv(ch): return tb.fader_shadow.get((tb.INCH_LEVEL, ch - 1, 0))
+check("vdca_level -5 dB", tb.vdca_level(-600, -5.0), -1100)
+check("vdca_level clamps at +10 dB", tb.vdca_level(900, 5.0), 1000)
+check("vdca_level -inf member stays -inf", tb.vdca_level(tb.NEG_INF, 3.0), tb.NEG_INF)
+check("vdca_level -inf offset", tb.vdca_level(-600, float("-inf")), tb.NEG_INF)
+check("vdca_level below floor -> -inf", tb.vdca_level(-13700, -5.0), tb.NEG_INF)
+
+def t_vdca(fake):
+    vd_reset()
+    for c, v in ((2, -600), (3, -400), (4, 0), (6, -1000)):
+        tb.fader_shadow[(tb.INCH_LEVEL, c - 1, 0)] = v
+    tb.on_osc("/vdca/2/only", "3,4,6"); 
+    check("members set", sorted(tb.vdca_members[2]), [3, 4, 6])
+    check("joining alone changes nothing (offset 0)", [lv(3), lv(4), lv(6)], [-400, 0, -1000])
+    tb.on_osc("/vdca/2/fader", -5)
+    check("group -5 dB applied to members", [lv(3), lv(4), lv(6)], [-900, -500, -1500])
+    check("non-member untouched", lv(2), -600)
+    tb.on_osc("/vdca/2/only", "4")
+    check("removed members restored to base", [lv(3), lv(6)], [-400, -1000])
+    check("remaining member keeps offset", lv(4), -500)
+    tb.on_osc("/vdca/1/only", "4")
+    tb.on_osc("/vdca/1/fader", 2)
+    check("two groups add (-5 + 2)", lv(4), -300)
+    tb.on_osc("/vdca/2/clear")
+    check("leaving one group keeps the other's offset", lv(4), 200)
+    tb.on_osc("/vdca/1/clear")
+    check("leaving the last group restores base", lv(4), 0)
+    check("base released", tb.vdca_base, {})
+with_fake(t_vdca)
+
+def t_vdca_direct(fake):
+    vd_reset()
+    tb.fader_shadow[(tb.INCH_LEVEL, 2, 0)] = -400
+    tb.on_osc("/vdca/1/only", "3"); tb.on_osc("/vdca/1/fader", -5)
+    tb.on_osc("/ch/3/fader", -10)                    # user moves the fader directly
+    check("direct write lands as written", lv(3), -1000)
+    tb.on_osc("/vdca/1/fader", 0)
+    check("then group 0 dB returns to the new base", lv(3), -500)
+with_fake(t_vdca_direct)
+
+def t_vdca_fade(fake):
+    vd_reset()
+    tb.fader_shadow[(tb.INCH_LEVEL, 4, 0)] = 0
+    tb.on_osc("/vdca/3/only", "5")
+    tb.on_osc("/vdca/3/fade", -5, 1000)
+    f = tb.active_fades.get((tb.INCH_LEVEL, 4, 0))
+    check("fade registered to base+offset", (f.from_raw, f.to_raw, f.dur) if f else None, (0, -500, 1000))
+    tb.on_osc("/vdca/9/fader", -5)
+    check("vdca 9 rejected", 9 in tb.vdca_members, False)
+with_fake(t_vdca_fade)
+
+print("send only / prepost:")
+def t_send_only(fake):
+    tb.on_osc("/ch/1-6/send/mix/2/only", "2,5")
+    got = {(int(x.split()[2]), x.split()[3]): x.split()[4] for x in fake.lines()}
+    check("only: listed on, rest of scope off", sorted((i + 1, v) for (i, d), v in got.items()),
+          [(1, "0"), (2, "1"), (3, "0"), (4, "0"), (5, "1"), (6, "0")])
+    check("dest 2 -> index 1", {d for (i, d) in got}, {"1"})
+    fake.writes.clear()
+    tb.on_osc("/ch/1-3/send/mix/2-3/only")
+    check("no args = all off, both dests", sorted(x.split()[4] for x in fake.lines()), ["0"] * 6)
+    fake.writes.clear()
+    tb.on_osc("/ch/1-3/send/mix/3/only", "9")
+    check("out-of-scope keep ignored", sorted(x.split()[4] for x in fake.lines()), ["0"] * 3)
+    fake.writes.clear()
+    tb.on_osc("/ch/1-2/send/mix/3/prepost", 0)
+    check("prepost raw", fake.lines(), ["set MIXER:Current/InCh/ToMix/PrePost 0 2 0", "set MIXER:Current/InCh/ToMix/PrePost 1 2 0"])
+    fake.writes.clear()
+    tb.on_osc("/ch/1|2/send/mix/3/only", "1")
+    check("'|' rejected for send only", fake.lines(), [])
+with_fake(t_send_only)
+
+print("scene recall vs remembered state:")
+def t_scene_wins(fake):
+    tb.on_osc("/ch/1-3/on", 0)                      # QLab-style cue: remembered desired state
+    tb.synchronize_states()
+    check("states remembered", len(tb.desired_mute_state), 3)
+    sent, real = [], tb.set_desired_scene
+    tb.set_desired_scene = lambda b, n: sent.append((b, n))
+    tb.on_osc("/scene/recall", "a", 76)
+    check("recall forgets remembered state (scene wins)", dict(tb.desired_mute_state), {})
+    check("scene still requested", sent, [("A", 76)])
+    tb.on_osc("/ch/1-3/on", 0)
+    tb.on_osc("/scene/recall", "a", 77, "keep")
+    check("`keep` retains remembered state", len(tb.desired_mute_state), 3)
+    tb.set_desired_scene = real
+with_fake(t_scene_wins)
+
 print()
 if _failures:
     print(f"FAILED {len(_failures)}: {_failures}")

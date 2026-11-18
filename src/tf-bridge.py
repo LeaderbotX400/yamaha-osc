@@ -106,6 +106,12 @@ presets, presets_mtime = {}, None
 snapshots = {}
 snap_lock = threading.Lock()
 
+# Virtual DCAs: the TF's RCP cannot assign channels to its real DCAs, so the bridge keeps its own groups.
+vdca_lock = threading.RLock()
+vdca_members = {}     # n -> set of input channel numbers (1-based)
+vdca_offset = {}      # n -> group offset in dB (0.0 = none; -inf allowed)
+vdca_base = {}        # channel -> base raw level, held while the channel is in any virtual DCA
+
 _tls = threading.local()   # per-thread "collect" context: a preset's writes go out as one batch
 
 
@@ -840,6 +846,16 @@ def set_desired_scene(bank, num):
     sync_wake.set()
 
 
+def forget_remembered_states():
+    """Drop the remembered (desired/applied) mic on/off so a recalled scene is not overridden."""
+    with state_lock:
+        n = len(desired_mute_state)
+        desired_mute_state.clear()
+        applied_mute_state.clear()
+    if n:
+        log(f"FORGOT {n} remembered on/off state(s) before scene recall")
+
+
 def on_scene(addr, *args):
     if not args:
         return
@@ -1082,7 +1098,7 @@ def start_fades_now(specs):
     fade_wake.set()
 
 
-def set_levels_direct(items):
+def set_levels_direct(items, note=True):
     """items: (path, idx, sub, raw). A direct write cancels any fade on the same target (last
     writer wins): the fades are popped *before* we take write_lock, see fade_tick."""
     if not items:
@@ -1091,6 +1107,8 @@ def set_levels_direct(items):
     emit([f"set {p} {i} {s} {raw}" for p, i, s, raw in items])
     for p, i, s, raw in items:
         fader_shadow[(p, i, s)] = raw
+    if note and vdca_base:
+        vdca_note_direct(items)
 
 
 def set_level_direct(path, index, sub, raw):
@@ -1206,6 +1224,120 @@ def _level_path(node):
     return f"MIXER:Current/{node}/Fader/Level"
 
 
+# ---- virtual DCAs ---------------------------------------------------------------------------
+# /vdca/<n>/only|add|remove|clear <channels>   membership (input channels 1-40)
+# /vdca/<n>/fader <dB>   /vdca/<n>/fade <dB> <ms> [curve]   group offset applied to every member
+# A member's level = its base level + the offsets of every virtual DCA it is in. Leaving the last
+# group restores the base level. A direct write to a member's fader becomes its new base.
+INCH_LEVEL = "MIXER:Current/InCh/Fader/Level"
+
+
+def vdca_level(base_raw, offset_db):
+    """Raw level for a channel whose base is base_raw under a total offset (dB, may be -inf)."""
+    if base_raw == NEG_INF or offset_db == float("-inf"):
+        return NEG_INF
+    new = base_raw + int(round(offset_db * 100))
+    if new > FADER_MAX:
+        return FADER_MAX
+    if new < MIN_DB_RAW:
+        return NEG_INF
+    return new
+
+
+def _vdca_total(ch):
+    return sum(vdca_offset.get(n, 0.0) for n, m in vdca_members.items() if ch in m)
+
+
+def _vdca_target(ch):
+    return vdca_level(vdca_base[ch], _vdca_total(ch))
+
+
+def _vdca_in_any(ch):
+    return any(ch in m for m in vdca_members.values())
+
+
+def _vdca_write(chs, ms=0, curve="linear"):
+    """Write (or fade to) each channel's computed level. Caller holds vdca_lock."""
+    chs = [c for c in chs if c in vdca_base]
+    if ms > 0:
+        start_fades([((INCH_LEVEL, c - 1, 0), INCH_LEVEL, c - 1, 0, _vdca_target(c), ms, curve, None)
+                     for c in chs])
+    else:
+        set_levels_direct([(INCH_LEVEL, c - 1, 0, _vdca_target(c)) for c in chs], note=False)
+
+
+def vdca_membership(n, op, channels):
+    with vdca_lock:
+        old = set(vdca_members.get(n, set()))
+        want = set(channels)
+        new = {"only": want, "add": old | want, "remove": old - want, "clear": set()}[op]
+        added, removed = new - old, old - new
+        vdca_members[n] = new
+        vdca_offset.setdefault(n, 0.0)
+        if added:
+            known = current_levels([(INCH_LEVEL, c - 1, 0) for c in added if c not in vdca_base])
+            for c in added:
+                if c not in vdca_base:
+                    lv = known.get((INCH_LEVEL, c - 1, 0))
+                    if lv is None:
+                        log(f"vdca {n}: no known level for ch{c}; not added")
+                        new.discard(c)
+                    else:
+                        vdca_base[c] = lv
+        restore, keep = [], []
+        for c in removed:
+            if _vdca_in_any(c):
+                keep.append(c)
+            elif c in vdca_base:
+                restore.append((INCH_LEVEL, c - 1, 0, vdca_base.pop(c)))
+        set_levels_direct(restore, note=False)
+        _vdca_write(keep + [c for c in new if c in added or c in keep])
+        log(f"VDCA {n}: members {sorted(new)} offset {vdca_offset[n]:g} dB")
+
+
+def vdca_set_offset(n, db, ms=0, curve="linear"):
+    with vdca_lock:
+        vdca_offset[n] = db
+        _vdca_write(sorted(vdca_members.get(n, ())), ms, curve)
+        log(f"VDCA {n}: offset {db:g} dB" + (f" over {ms} ms" if ms > 0 else ""))
+
+
+def vdca_note_direct(items):
+    """A direct write to a member's fader becomes its new base (so group moves stay relative to it)."""
+    with vdca_lock:
+        for path, i, sub, raw in items:
+            c = i + 1
+            if path == INCH_LEVEL and c in vdca_base:
+                tot = _vdca_total(c)
+                vdca_base[c] = raw if tot in (0.0, float("-inf")) or raw == NEG_INF else raw - int(round(tot * 100))
+
+
+def vdca_command(n, verb, args, addr):
+    if not 1 <= n <= MAX_DCA:
+        log(f"{addr}: virtual DCA must be 1-{MAX_DCA}")
+        return
+    if verb in ("only", "add", "remove"):
+        chs = parse_range_list(join_tokens(norm_tokens(args)), 1, MAX_INPUT_CH)
+        vdca_membership(n, verb, chs)
+    elif verb == "clear":
+        vdca_membership(n, "clear", [])
+    elif verb == "fader":
+        db = parse_db_arg(args[0]) if args else None
+        if db is None:
+            log(f"BAD vdca fader arg: {addr} {args}")
+            return
+        vdca_set_offset(n, db)
+    elif verb == "fade":
+        spec = parse_fade_args(args)
+        if spec is None:
+            log(f"BAD vdca fade args: {addr} {args}")
+            return
+        to_raw, ms, curve, _ = spec
+        vdca_set_offset(n, float("-inf") if to_raw == NEG_INF else to_raw / 100.0, ms, curve)
+    else:
+        log(f"UNMATCHED vdca verb: {addr}")
+
+
 def on_osc(addr, *args):
     """Default handler: the /<strip>/<sel>/<param> grammar plus /scene, /mutegroup, /preset,
     /snapshot and /panic. A message's console writes go out as one batch."""
@@ -1216,12 +1348,17 @@ def on_osc(addr, *args):
             log(f"FADES STOPPED: {cancel_all_fades()}")
             return
 
-        # /scene/recall <a|b> <n>   (stateful, like /tf/scene)
+        # /scene/recall <a|b> <n> [keep]
+        # The scene wins: remembered mic on/off from earlier cues is forgotten first, so it is NOT replayed over the
+        # recalled scene. Add `keep` to get the legacy /tf/scene behaviour (remembered states re-asserted on top).
         if seg[:2] == ["scene", "recall"]:
             if len(args) >= 2:
                 bank = str(args[0]).strip().upper()[:1]
                 num = int(float(args[1]))
+                keep = any(str(a).strip().lower() == "keep" for a in args[2:])
                 if bank in ("A", "B") and 0 <= num <= 99:
+                    if not keep:
+                        forget_remembered_states()
                     set_desired_scene(bank, num)
             return
 
@@ -1235,6 +1372,10 @@ def on_osc(addr, *args):
                     on = 1 if _truthy(v) else 0
                     cmds += [f"set MIXER:Current/MuteMaster/On {n - 1} 0 {on}" for n in g]
             emit(cmds)
+            return
+
+        if len(seg) == 3 and seg[0] == "vdca":
+            vdca_command(int(seg[1]), seg[2], args, addr)
             return
 
         if len(seg) == 2 and seg[0] == "preset":
@@ -1427,6 +1568,33 @@ def _handle_send(node, groups, flat_idx, rest, args, addr):
         to_raw, ms, curve, from_raw = spec
         start_fades([((lpath, i, d), lpath, i, d, to_raw, ms, curve, from_raw)
                      for i in flat_idx for d in dests])
+    elif leaf == "only":
+        # Sends to these destinations are ON for the listed channels and OFF for every other channel
+        # in the selector (the send-level twin of the strip-level `only`). Direct writes.
+        if len(groups) != 1:
+            log(f"{addr}: 'only' takes a single selector, not '|' groups")
+            return
+        keep = set(parse_range_list(join_tokens(norm_tokens(args)), 1, STRIP_MAX.get(node, 96)))
+        scope = groups[0]
+        stray = sorted(keep - {i + 1 for i in scope})
+        if stray:
+            log(f"{addr}: {stray} outside the selector; ignored")
+        emit([f"set MIXER:Current/{node}/{leaf_node}/On {i} {d} {1 if i + 1 in keep else 0}"
+              for i in scope for d in dests])
+    elif leaf == "prepost":
+        # Raw 0|1 as the console stores it (which value means pre-fader is verified on the desk, not assumed).
+        vals = values_per_group(flat_values(args), len(groups), addr)
+        cmds = []
+        for g, v in zip(groups, vals):
+            if v is None:
+                continue
+            try:
+                raw = 1 if int(float(v)) else 0
+            except (TypeError, ValueError):
+                log(f"BAD prepost arg: {addr} {args}")
+                return
+            cmds += [f"set MIXER:Current/{node}/{leaf_node}/PrePost {i} {d} {raw}" for i in g for d in dests]
+        emit(cmds)
     else:
         log(f"UNMATCHED send leaf: {addr}")
 

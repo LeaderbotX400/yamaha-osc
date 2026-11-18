@@ -79,6 +79,13 @@ One process, three concerns:
     *direct* (last-writer-wins). **`on` / `mute` / `only` on `ch`/`mix`/`mtrx`/`dca` are stateful** — they
     go through `set_on_pairs` → `update_state` into the same desired-state map as `/tf/mute`, so scene
     recalls re-assert them; `stin`/`fxrtn`/`st`/`mono` on/off stay direct.
+  - **Virtual DCAs** — the TF's RCP has no DCA-assignment parameter (checked: its 108 parameters, no match), so
+    `/vdca/<n>/only|add|remove|clear|fader|fade` keep bridge-side groups (`vdca_*`): level = base + group offsets,
+    direct fader writes re-base a member (`vdca_note_direct`). In-memory only; scene recalls overwrite levels.
+  - **Scene-only design (current show)** — one flat QLab cue per number sends `/scene/recall a <75+n>` (scenes A76-A97, stored on
+    the desk, carry mic on/off and DCA layout); `build_mic_cues.py` generates/migrates them. Never store/overwrite a scene without
+    explicit approval for that slot. The send `only`/`prepost` verbs and `/vdca` remain in the code but the show doesn't use them.
+    `/scene/recall` forgets the remembered on/off first (`forget_remembered_states`) so the scene wins; `keep` or `/tf/scene` re-assert.
   - **Extras** — `only` (mic cut), `fader/rel`, `fade/stop`, `/panic`, `/preset/<name>`
     (`presets.json`, lines run through `dispatch`), `/snapshot/save|recall` (`snapshots.json`).
 
